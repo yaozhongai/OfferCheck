@@ -41,6 +41,7 @@ class ChatRequest(BaseModel):
                             description="会话 ID，用于上下文关联")
     message: str = Field(..., min_length=1, max_length=10000,
                          description="用户输入文本")
+    user_id: Optional[str] = Field(None, description="可选：用户 ID，用于 LTM 隔离")
     image_path: Optional[str] = Field(None, description="可选：关联图片路径")
     metadata: Optional[Dict[str, Any]] = Field(None, description="附加元信息")
 
@@ -108,42 +109,12 @@ class ImageAnalysisResponse(BaseModel):
 # 记忆管理
 # ---------------------------------------------------------------------------
 
-class MemoryQueryRequest(BaseModel):
-    """记忆查询请求"""
-    session_id: Optional[str] = Field(None, description="按会话 ID 筛选")
-    limit: int = Field(20, ge=1, le=200)
-    offset: int = Field(0, ge=0)
-
-
-class InvoiceRecord(BaseModel):
-    """票据记录"""
-    id: int
-    filename: Optional[str] = None
-    invoice_code: Optional[str] = None
-    invoice_date: Optional[str] = None
-    amount: Optional[float] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
-    created_at: str = ""
-
-
 class MemoryListResponse(BaseModel):
     """记忆列表响应"""
     total: int
     items: List[Dict[str, Any]]
     limit: int
     offset: int
-
-
-class PreferenceRequest(BaseModel):
-    """偏好设置请求"""
-    key: str = Field(..., min_length=1, max_length=255)
-    value: str = Field(..., min_length=1, max_length=10000)
-
-
-class PreferenceResponse(BaseModel):
-    """偏好响应"""
-    key: str
-    value: str
 
 
 # ---------------------------------------------------------------------------

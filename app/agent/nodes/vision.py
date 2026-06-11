@@ -1,5 +1,7 @@
 """vision_direct / vision_schema / vision_perceive — VLM 节点"""
 
+from __future__ import annotations
+
 import time
 import json
 from typing import Optional
@@ -19,10 +21,29 @@ def _get_image_path(state: AgentState) -> Optional[str]:
 
 
 def _get_cached_image_analysis(state: AgentState) -> tuple[str, dict]:
-    active_file = (state.get("input_metadata") or {}).get("active_file") or {}
-    text = active_file.get("vlm_text") or ""
-    structured = active_file.get("structured_data") or {}
-    return text.strip(), structured if isinstance(structured, dict) else {}
+    """从 ImageAnalysisCache 表查询已缓存的 VLM 识别结果（按文件 SHA256）"""
+    image_path = _get_image_path(state)
+    if not image_path:
+        return "", {}
+    try:
+        from app.storage.database import get_session
+        from app.storage.models import ImageAnalysisCache
+        import hashlib
+        with open(image_path, "rb") as f:
+            file_sha256 = hashlib.sha256(f.read()).hexdigest()
+        s = get_session()
+        try:
+            row = s.query(ImageAnalysisCache).filter_by(
+                file_sha256=file_sha256, status="success",
+            ).first()
+            if row and row.vlm_text:
+                logger.info("VLM 缓存命中 sha256=%s path=%s", file_sha256[:16], image_path)
+                return row.vlm_text.strip(), row.structured_data
+        finally:
+            s.close()
+    except Exception as exc:
+        logger.debug("缓存查询失败: %s", exc)
+    return "", {}
 
 
 def _answer_from_cached_analysis(question: str, image_text: str) -> tuple[str, ModelCallRecord | None]:

@@ -119,6 +119,15 @@ class LlamaCppVLMEngine(BaseVLMEngine):
                 "llama.cpp VLM 完成 model=%s elapsed=%.0fms tokens(in=%d out=%d)",
                 self._model, elapsed, result.prompt_tokens, result.completion_tokens,
             )
+            # 打印结构化数据
+            import json as _json
+            try:
+                sd = result.structured_data
+                sd_str = _json.dumps(sd, ensure_ascii=False, indent=4)
+                logger.info("VLM structured_data (%d keys, %d chars):\n%s",
+                            len(sd) if sd else 0, len(sd_str), sd_str[:2000])
+            except Exception:
+                logger.debug("structured_data 序列化失败")
             return result
 
         except Exception as exc:

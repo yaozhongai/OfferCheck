@@ -1,6 +1,6 @@
 # AgentState Schema 设计文档 V2
 
-> 版本：V0.2
+> 版本：V0.3 | 日期：2026-06-10 | LTM 检索结果通过 `memory_candidates` / `evidence` 注入，不新增 `long_term_memory` 字段
 > 目标：面向 LangGraph 原生重构
 > 原则：LangGraph 是唯一图执行引擎，AgentState 是唯一跨节点状态协议
 

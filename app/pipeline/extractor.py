@@ -116,7 +116,7 @@ class ExtractionPipeline:
 
         # 按路线执行
         if mode == "vlm" or (mode == "auto" and self.vlm_available):
-            return self._extract_vlm(image_path)
+            return self._extract_vlm(image_path, prompt=text_input)
         else:
             logger.warning("无可用提取路线 image_path=%s", image_path)
             return ExtractionResult(
@@ -125,14 +125,14 @@ class ExtractionPipeline:
                 metadata={"error": "无可用引擎"},
             )
 
-    def _extract_vlm(self, image_path: str) -> ExtractionResult:
+    def _extract_vlm(self, image_path: str, prompt: str = "") -> ExtractionResult:
         """VLM 端到端提取"""
         if not self.vlm_available:
             raise RuntimeError("VLM 引擎未注册或不可用")
 
         import time
         t0 = time.time()
-        vlm_result = self._vlm_engine.analyze_image(image_path)
+        vlm_result = self._vlm_engine.analyze_image(image_path, prompt=prompt)
         elapsed = (time.time() - t0) * 1000
 
         return ExtractionResult(

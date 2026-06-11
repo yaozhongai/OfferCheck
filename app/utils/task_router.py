@@ -122,10 +122,10 @@ def route_task(user_input: str, image_path: str | None = None, parsed_content: s
             matched_rules=["tool_keyword"],
         )
 
-    # ── 纯文本：知识问答 ──
-    logger.info("路由: TEXT_QA")
+    # ── 纯文本：TOOL_ACT ──
+    logger.info("路由: TOOL_ACT (文本)")
     return RouteResult(
-        route_type=RouteType.TEXT_QA,
+        route_type=RouteType.TOOL_ACT,
         confidence=0.85,
         risk_level=RiskLevel.LOW,
         need_retrieve=True,

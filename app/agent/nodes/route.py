@@ -19,22 +19,14 @@ from app.utils.logger_config import get_logger
 logger = get_logger("node.route")
 
 # L2 LLM 路由 prompt
-_ROUTE_PROMPT = """你是一个任务路由器。分析用户输入，输出 JSON。
+_ROUTE_PROMPT = """你是一个任务路由器。所有正常请求都走 tool_act。仅输出 JSON。
 
 ## 路由类型
-- vision_direct: 用户有图片，问题可以直接从图片中回答（如"这是什么""金额多少""里面有什么"）
-- vision_schema: 用户有图片，要求提取结构化信息（如"提取发票字段""输出JSON""整理成表格"）
-- rag_qa: 纯文本问答，无图片；或者图片+复杂推理（如"是否可以报销""原因是什么""给出建议"）
-- tool_act: 要求执行操作（如"重启设备""生成工单""发送邮件"）
+- tool_act: 正常请求（ReAct Agent 处理），占 99%
+- fallback: 完全无法理解的乱码或空输入
 
 ## 输出格式
-{"route_type": "<类型>", "confidence": 0.0~1.0, "reason": "<简短理由>"}
-
-## 示例
-用户: "你好" → {"route_type": "rag_qa", "confidence": 0.95, "reason": "纯文本问候"}
-用户: "金额多少" (有图) → {"route_type": "vision_direct", "confidence": 0.95, "reason": "图片直答"}
-用户: "提取发票信息" (有图) → {"route_type": "vision_schema", "confidence": 0.95, "reason": "结构化提取"}
-用户: "是否可以报销" (有图) → {"route_type": "rag_qa", "confidence": 0.9, "reason": "需推理判断"}
+{"route_type": "tool_act", "confidence": 0.0~1.0, "reason": "<简短理由>"}
 
 只输出 JSON。"""
 
@@ -59,7 +51,7 @@ def route_task(state: AgentState) -> dict:
             r.matched_rules.append("llm_fallback")
 
     # ── 构造新 RouteResult ──
-    legacy_map = {"vision_reason": "rag_qa", "text_qa": "rag_qa"}
+    legacy_map = {"vision_reason": "tool_act", "text_qa": "tool_act", "rag_qa": "tool_act", "vision_direct": "tool_act", "vision_schema": "tool_act"}
     mapped_type = legacy_map.get(r.route_type.value, r.route_type.value)
 
     route_result = RouteResult(

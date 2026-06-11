@@ -69,9 +69,22 @@ uploads/
 # ── Claude Code ──
 .claude/
 
+# ── 实验模块（非生产代码）──
+react_exp/
+
 # ── 脚本 / 运维文件 ──
 scripts/
+
+# ── 知识库本地文件 ──
+data/extracts/
+
+# ── Milvus 本地数据 ──
+milvus_data/
 
 # ── 其他中间产物 ──
 *.db-shm
 *.db-wal
+
+docs/
+1780846142722.png
+milvus_manager.py

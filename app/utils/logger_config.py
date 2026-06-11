@@ -34,9 +34,10 @@ class LoggerConfig:
         # 创建日志记录器
         logger = logging.getLogger(name)
         logger.setLevel(getattr(logging, level.upper()))
-        
-        # 清除已有的处理器，避免重复
+
+        # 清除已有处理器 + 禁止向 root logger 传播，避免重复
         logger.handlers.clear()
+        logger.propagate = False
         
         # 创建格式化器
         formatter = logging.Formatter(

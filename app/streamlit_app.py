@@ -445,7 +445,7 @@ def _health_check() -> dict | None:
 
 def _post_chat(payload: dict) -> dict:
     try:
-        return requests.post(f"{API_BASE}/api/v0/chat", json=payload, timeout=120).json()
+        return requests.post(f"{API_BASE}/api/v0/chat", json=payload, timeout=300).json()
     except Exception as exc:
         return {"error": str(exc), "status": "error"}
 
@@ -884,21 +884,17 @@ def render_active_file_context(info: dict):
 
 NODE_DISPLAY_NAMES = {
     "normalize_input": "输入标准化",
+    "load_short_term_context": "加载上下文",
     "route_task": "任务路由",
-    "vision_direct": "视觉理解",
-    "vision_schema": "结构化识别",
-    "vision_perceive": "视觉感知",
-    "validate_direct": "结果校验",
-    "validate_schema": "结构校验",
-    "retrieve": "检索上下文",
-    "reason": "回答推理",
-    "verify": "回答验证",
+    "react_decide": "推理决策",
+    "execute_tool": "工具执行",
+    "react_finish": "完成",
     "respond": "回答生成",
     "update_memory": "记忆写入",
     "fallback": "兜底处理",
     "trace_completed": "请求完成",
     "trace_failed": "请求失败",
-    "model": "模型调用",
+    "model_call": "模型调用",
 }
 
 

@@ -1,6 +1,6 @@
 # Nexa Agent 开发规划
 
-> 版本：V1.2 | 日期：2026-06-10
+> 版本：V2.0 | 日期：2026-06-11
 
 ---
 
@@ -29,9 +29,19 @@ Direct First, Agent When Needed
 | 4 条执行路径 (VISION_DIRECT / SCHEMA / RAG_QA / TOOL_ACT) | ✅ |
 | VLM (llama.cpp + MiniCPM-V, OpenAI SDK) | ✅ |
 | LLM (DeepSeek V4 / Kimi K2.6 / GLM-5.1) | ✅ |
-| 校验器 (L1 规则 + L2 LLM Verifier, 仅复杂推理触发) | ✅ |
+| 架构简化：TOOL_ACT (ReAct) + FALLBACK 双路径 | ✅ |
+| VLM 图片分析工具化 (analyze_image)，缓存命中自动复用 | ✅ |
+| 7 个 ReAct 工具（web_search/wikipedia/calculator/time/analyze_image/tavily_extract/save_content） | ✅ |
+| 上下文统一加载 (load_context: STM + LTM) | ✅ |
+| kb_documents 知识库表 + 网页提取沉淀 | ✅ |
+| ReAct 思考模式自动切换 + 步数控制（tool_results 计数） | ✅ |
 | 短期记忆 STM Schema (session/turn/entry + Turn 级别上下文裁剪) + 长期记忆 (SQLAlchemy) | ✅ |
-| STM 始终写入 (每轮对话) / LTM 按 need_memory_write 门控 | ✅ |
+| STM 始终写入 (每轮对话) / LTM 按记忆门控写入 | ✅ |
+| LTM Schema 落地 (ltm_schema.py + ltm_memory_items/events/forget 表) | ✅ |
+| 旧表清理 (Invoice/Conversation/Message/Preference/Reflection 已删除) | ✅ |
+| ChatRequest 新增 user_id (LTM 用户隔离) | ✅ |
+| LTM API (GET/DELETE/PATCH /api/v0/memory/ltm) | ✅ |
+| Memory Gate (build_memory_candidates_from_state) | ✅ |
 | `load_short_term_context` 节点 (Trace + 日志双通道展示 STM 内容) | ✅ |
 | STM role → LLM role 映射 (observer/tool → user) | ✅ |
 | 旧架构清理 (StateContext / Handler / AgentStateMachine 已删除) | ✅ |

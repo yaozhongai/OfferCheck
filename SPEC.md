@@ -1,16 +1,16 @@
 # 项目规范：Nexa Agent V0
 
-> 版本：V1.1 | 日期：2026-06-10 | 状态：V0 功能完成，STM Schema 落地，V1 规划中
+> 版本：V2.1 | 日期：2026-06-12 | 状态：ReAct Agent 完成，7 工具上线（含提取/保存），知识库 kb_documents 就绪
 
 ---
 
 ## 1. 项目愿景与核心价值
 
-### 1.1 Nexa Agent V0 是什么
+### 1.1 Nexa Agent 是什么
 
-Nexa Agent V0 是一个 **LangGraph 原生、两层路由驱动、带完整 Trace 的多路径 Agent 系统**，专注于多模态票据/图片/文档识别与问答。
+Nexa Agent 是一个 **LangGraph 原生 ReAct Agent 系统**，支持多模态票据识别、网络搜索、百科查询、数学计算、图片分析、知识库检索与文档沉淀。
 
-核心设计理念：**Direct First, Agent When Needed**。首次图片理解优先由 VLM 完成，后续同会话图片问答优先复用已识别内容；VLM 能直答的不走 LLM，简单问答不反思，临时图片不写长期记忆。
+**所有请求统一走 TOOL_ACT (ReAct) 路径**：LLM 自行判断是否需要调工具，通过 Thought → Action → Observation 循环完成复杂任务，简单问答一步到位。图片通过 `analyze_image` 工具处理，缓存命中自动复用。
 
 ### 1.2 解决什么问题
 
@@ -30,15 +30,18 @@ Nexa Agent V0 是一个 **LangGraph 原生、两层路由驱动、带完整 Trac
 | 能力 | V0 状态 | 说明 |
 |------|---------|------|
 | 多模态输入理解 | ✅ 已实现 | 文本 + 图片（JPG/PNG/PDF） |
-| 票据图片直答 | ✅ 已实现 | VLM 0-LLM 路径，~0.5s 延迟 |
+| 票据图片分析 | ✅ 已实现 | analyze_image 工具（VLM，缓存命中 0 VLM） |
 | 图片预识别缓存 | ✅ 已实现 | 上传后一次 VLM 识别，后续图片问答复用 `vlm_text` |
 | 票据字段结构化提取 | ✅ 已实现 | JSON 输出，自动校验金额/日期格式 |
-| RAG 检索增强 | ✅ 已实现 | STM（会话上下文）+ LTM（历史票据/偏好）分层检索 |
-| 短期记忆管理 | ✅ 已实现 | Session/Turn/Entry 模型，上下文裁剪，write_from_state |
+| ReAct Agent | ✅ 已实现 | TOOL_ACT + FALLBACK 双路径，LLM 自主决策调工具 |
+| 工具集 | ✅ 已实现 | 7 工具：web_search/wikipedia/calculator/time/analyze_image/tavily_extract/save_content |
+| 知识库 | ✅ 已实现 | kb_documents 表，tavily_extract + save_content 提取沉淀 |
+| 长期记忆 | ✅ 已实现 | Preference/Fact/Experience 三类，门控写入 + 去重合并 |
+| 短期记忆 | ✅ 已实现 | Session/Turn/Entry 模型，Turn 级别上下文裁剪 |
 | LLM 推理 + 校验 | ✅ 已实现 | 复杂推理触发 L2 Verifier |
 | Agent 工作流 | ✅ 已实现 | LangGraph StateGraph 编排 |
 | 执行轨迹可视化 | ✅ 已实现 | Trace + SSE + Timeline |
-| ReAct / Tool Use | ❌ V0.5 规划 | TOOL_ACT 子图 |
+| ReAct / Tool Use | ✅ 已实现 | TOOL_ACT (ReAct) + FALLBACK 双路径，5 个工具 |
 | 语义检索 | ❌ V1 规划 | Milvus 向量检索 |
 | HITL 人工确认 | ❌ V1 规划 | LangGraph interrupt() |
 
@@ -46,37 +49,44 @@ Nexa Agent V0 是一个 **LangGraph 原生、两层路由驱动、带完整 Trac
 
 ## 2. 项目范围与非目标
 
-### 2.1 V0 已实现
+### 2.1 已实现
 
 - [x] LangGraph 原生 StateGraph + AgentState TypedDict + Reducer
 - [x] 两层路由：L1 关键词规则（0ms）+ L2 DeepSeek V4 Flash 分类
-- [x] 4 条执行路径：VISION_DIRECT / VISION_SCHEMA / RAG_QA / TOOL_ACT（占位）
-- [x] VLM：llama.cpp + MiniCPM-V，OpenAI 兼容 API（127.0.0.1:8080/v1）
+- [x] TOOL_ACT (ReAct) + FALLBACK 双路径架构，VLM/搜索/计算/百科全部工具化
+- [x] VLM：llama.cpp + MiniCPM-V，作为 analyze_image 工具调用（缓存命中 0 VLM）
 - [x] 上传后图片预识别缓存：`/api/v0/files/analyze` + `image_analysis_cache`
 - [x] LLM：DeepSeek V4（v4-pro / v4-flash）/ Kimi K2.6 / GLM-5.1
 - [x] 校验器：L1 规则校验 + L2 LLM Verifier（仅复杂推理触发）
 - [x] STM Schema 数据模型（枚举 + Pydantic，对齐 STM Schema）
 - [x] 短期记忆 Store（session/turn/entry + 上下文裁剪 + write_from_state）
 - [x] 长期记忆（SQLAlchemy + SQLite）
-- [x] 记忆门控写入（VISION_DIRECT 不写，VISION_SCHEMA 写票据数据）
+- [x] LTM Schema 数据模型（ltm_schema.py，枚举 + Pydantic，对齐 LTM Schema）
+- [x] LTM Store（ltm_memory_items / events / forget，upsert / retrieve / forget / Memory Gate）
+- [x] 旧表清理（Invoice/Conversation/Message/Preference/Reflection 已删除）
+- [x] ChatRequest 新增 user_id（LTM 用户隔离）
+- [x] 长期记忆 API（GET/DELETE/PATCH /api/v0/memory/ltm）
+- [x] IMAGE_ANALYSIS_PROMPT（VLM 自动判断发票/普通图片，结构化 JSON 输出）
+- [x] 图片缓存 SHA256 查询（同一图片跨 session 复用，chat 时自动命中）
+- [x] Makefile VLM 自动启动（make all/backend 先启 llama.cpp 再启后端）
+- [x] VLM 识别后结构化 JSON 日志（indent=4 美观输出）
 - [x] FastAPI（:8000）+ Streamlit（:8501）+ CLI
 - [x] 完整 Trace 系统（agent_trace_runs / agent_trace_events / SSE / Timeline）
 - [x] .env 配置 + Makefile 一键启动
 - [x] 所有日志通过 `app/utils/logger_config.py` 统一输出
 
-### 2.2 V0 待完成
+### 2.2 待完成
 
 | 项目 | 优先级 | 说明 |
 |------|--------|------|
+| 知识库向量检索（Milvus） | P1 | kb_documents 表已建，待补 Milvus 集合 + retrieve 集成 |
 | 单元测试 | P2 | 当前零测试覆盖 |
 
-### 2.3 V1 规划（不做承诺）
+### 2.3 后续规划
 
-- TOOL_ACT 实现（ReAct 子图：Thought → Action → Observation 循环）
+- 更多工具：邮件发送、文件操作、API 调用
 - 文档解析（PDF / Word / Excel / Markdown / TXT）
-- 语义检索（Milvus 向量数据库）
 - Redis 短期记忆（替代内存 LRU）
-- 模型路由（按任务复杂度自动选模型）
 - HITL 人工确认（LangGraph `interrupt()` + human_confirm）
 
 ### 2.4 明确不做
@@ -192,7 +202,7 @@ Nexa_Agent/
 │   │   └── sse.py                  # SSE 流式推送 + after_seq 重连
 │   ├── storage/                    # 持久化层
 │   │   ├── database.py             # Engine + Session（SQLite WAL）
-│   │   └── models.py               # ORM 模型（7 张表）
+│   │   └── models.py               # ORM: image_analysis_cache + ltm_memory_items/events/forget + Trace 2表
 │   ├── llm/                        # LLM 客户端
 │   │   └── client.py               # DeepSeekClient / KimiClient / GLMClient
 │   ├── api/                        # FastAPI 接口层
@@ -203,14 +213,15 @@ Nexa_Agent/
 │   │       ├── upload.py           # POST /api/v0/upload
 │   │       ├── memory.py           # GET/DELETE /api/v0/memory/*
 │   │       └── trace.py            # GET /api/v0/trace/*（SSE + Timeline）
-│   ├── memory/                     # 短期记忆（STM Schema）+ 长期记忆
-│   │   ├── stm_schema.py           # 枚举 + Pydantic 模型（对齐 STM Schema）
-│   │   ├── short_term.py           # STM Store（turn/entry/session/上下文裁剪）
-│   │   └── long_term.py            # LTM Store（SQLAlchemy CRUD）
+│   ├── memory/                     # STM Schema + LTM Schema
+│   │   ├── stm_schema.py           # STM 枚举 + Pydantic
+│   │   ├── short_term.py           # STM Store（Turn/Entry/Session）
+│   │   ├── ltm_schema.py           # LTM 枚举 + Pydantic
+│   │   └── long_term.py            # LTM Store（MemoryItem/Event/Forget + Memory Gate）
 │   ├── pipeline/                   # VLM + 提取管线
-│   │   ├── vlm.py                  # BaseVLMEngine 抽象 + VLMResult
-│   │   ├── llamacpp_vlm.py         # llama.cpp VLM 引擎
-│   │   ├── extractor.py            # ExtractionPipeline
+│   │   ├── vlm.py                  # BaseVLMEngine + 3 个 Prompt（Invoice/General/Composite）
+│   │   ├── llamacpp_vlm.py         # llama.cpp VLM 引擎 + structured_data 日志输出
+│   │   ├── extractor.py            # ExtractionPipeline（prompt 透传 VLM）
 │   ├── utils/                      # 工具
 │   │   ├── logger_config.py        # 统一日志配置
 │   │   ├── task_router.py          # L1 关键词路由规则
@@ -332,12 +343,12 @@ graph TD
       │
 2. Streamlit / CLI
       │  可选：POST /api/v0/upload → POST /api/v0/files/analyze
-      │  图片上传后先做一次 VLM 预识别，得到 vlm_text / structured_data
+      │  图片上传后用 IMAGE_ANALYSIS_PROMPT（VLM 自动判断发票/普通图片类型）
+      │  → 按 file_sha256 写入 image_analysis_cache（同一图片跨会话复用）
       │  HTTP POST /api/v0/chat
       ▼
 3. FastAPI chat.py
-      │  create_initial_state(user_input, session_id, image_refs, input_metadata)
-      │  input_metadata.active_file 可携带已识别图片内容
+      │  create_initial_state(user_input, session_id, image_refs)
       │  create_trace_run(request_id, session_id)
       ▼
 4. compiled_graph.invoke(state, config)
@@ -352,64 +363,57 @@ graph TD
 7. route_task                 → L1 关键词规则 → 置信度 < 0.9? → L2 DeepSeek V4 Flash
       │                         RouteResult(route_type, confidence, need_*)
       ▼
-8. conditional edge (route_after_task)
-      │
-      ├── VISION_DIRECT  → vision_direct  → validate_direct
-      ├── VISION_SCHEMA  → vision_schema  → validate_schema
-      ├── RAG_QA (+图)   → vision_perceive → retrieve → reason → (verify)?
-      ├── RAG_QA (纯文本) → retrieve → reason
-      ├── TOOL_ACT       → tool_act_placeholder
-      └── FALLBACK       → fallback
+8. conditional edge → TOOL_ACT (react_decide) 或 FALLBACK
       │
       ▼
-9. respond                    → final_answer 确认
+9. ReAct 循环 (max 6 steps)
+      │  react_decide (LLM: Thought → Action 或 Final Answer)
+      │  ⇄ execute_tool (工具执行 → Observation)
+      │  → react_finish (写入 final_answer)
+      ▼
+10. respond → final_answer 确认
       │
       ▼
-10. update_memory              → STM 始终写入（write_from_state: turn + entry 结构化，失败不阻断）
-         │                         LTM 由 need_memory_write 门控（消息 + 票据，失败不阻断）
+11. update_memory              → STM 始终写入 + LTM 门控写入（失败不阻断）
       │
       ▼
-11. END → result (AgentState)
-      │
-      ▼
-12. FastAPI to_public_response(result)
-      │  从 action_trace 发射 Trace 事件
-      │  complete_trace_run()
-      ▼
-13. ChatResponse JSON → Streamlit 渲染
+12. END → FastAPI to_public_response → ChatResponse JSON → Streamlit 渲染
       │  用户消息卡片 + 助手回答卡片
       │  展开详情 → GET /api/v0/trace/{id}/timeline → 管道流展示
 ```
 
-### 5.2 路径选择决策树
+### 5.2 路径决策
 
 ```text
-用户输入 + 是否有图片?
-│
-├── 有图片
-│   ├── 已有 active_file.vlm_text → cached image QA (0 VLM, 1 LLM over recognized text)
-│   ├── 关键词含 "提取/结构化/json/字段/发票号..." → VISION_SCHEMA (0 LLM, VLM提取→校验)
-│   ├── 关键词含 "是否可以/原因/风险/建议/判断..." → RAG_QA + vision_perceive (1-2 LLM, VLM感知→推理→校验)
-│   ├── 关键词含 "重启/生成工单/发送邮件..." → TOOL_ACT (V1占位)
-│   └── 默认 → VISION_DIRECT (0 LLM, VLM直答)
-│
-└── 纯文本
-    ├── 关键词含 "重启/生成工单/发送邮件..." → TOOL_ACT (V1占位)
-    └── 默认 → RAG_QA (1 LLM, 检索→推理)
+route_task → 所有请求 → TOOL_ACT (ReAct)
+                            │
+                     react_decide (LLM)
+                            │
+                    ┌───────┴───────┐
+                    ▼               ▼
+              调工具执行       直接 Final Answer
+              (analyze_image / web_search / ...)
+                    │
+                    ▼
+              Observation → react_decide (循环)
+              (最多 6 步)
+                    │
+                    ▼
+              react_finish → respond
+
+异常: FALLBACK → respond
 ```
 
-### 5.3 LLM / VLM 调用次数
+### 5.3 LLM / VLM / 工具调用
 
-| 路径 | LLM 调用 | VLM 调用 | Verify | STM | LTM |
-|------|----------|----------|--------|-----|-----|
-| VISION_DIRECT | 0 | 1 | ❌ | ✅ | ❌ |
-| Cached Image QA（已有 `vlm_text`） | 1 | 0 | ❌ | ✅ | ❌ |
-| VISION_SCHEMA | 0 | 1 | ❌ | ✅ | ✅ (票据数据) |
-| RAG_QA（纯文本） | 1 | 0 | ❌ | ✅ | ❌ |
-| RAG_QA（有图+推理） | 1-2 | 1 | ✅ | ✅ | ❌ |
-| TOOL_ACT | 0 | 0 | — | ✅ | V1 |
-| FALLBACK | 0 | 0 | ❌ | ✅ | ❌ |
-> **STM 每轮对话始终写入**，不受 `need_memory_write` 门控。LTM 仅 `need_memory_write=True` 时写入。
+| 路径 | LLM 调用 | VLM 调用 | 工具调用 | STM | LTM |
+|------|----------|----------|---------|-----|-----|
+| TOOL_ACT (简单问答) | 1 | 0 | 0 | ✅ | ❌ |
+| TOOL_ACT (搜索类) | 2-3 | 0 | 1-2 | ✅ | ❌ |
+| TOOL_ACT (图片问答) | 1-2 | 0-1 | 1 (analyze_image) | ✅ | ❌ |
+| TOOL_ACT (网页提取+沉淀) | 2-3 | 0 | 2 (extract+save) | ✅ | ❌ |
+| FALLBACK | 0 | 0 | 0 | ✅ | ❌ |
+> 7 个工具: analyze_image, web_search, wikipedia_search, calculator, get_current_time, tavily_extract, save_content。ReAct 循环 max_steps=6（按 tool_results 长度计），首步 thinking=enabled，后续根据上一步成功/失败自动切换。
 
 ---
 
@@ -445,8 +449,9 @@ graph TD
 `upload.py` 的职责包括：
 
 - 保存上传文件并返回 `file_id` / `file_sha256` / 服务端路径；
-- 对上传后的图片执行一次 VLM 预识别；
-- 查询 / 写入 `image_analysis_cache`，为后续图片问答提供 `vlm_text` 和 `structured_data`。
+- 使用 `IMAGE_ANALYSIS_PROMPT`（VLM 自动判断发票 vs 普通图片）执行 VLM 预识别；
+- 按 `file_sha256` 写入 `image_analysis_cache`，同一图片跨 session 复用；
+- chat 时 `vision.py` 对图片算 SHA256 查缓存，命中则走 Cached Image QA 路径（0 VLM）。
 
 ### 6.3 `agent/state.py` — AgentState Schema
 
@@ -469,12 +474,12 @@ graph TD
 ### 6.4 `agent/graph.py` — LangGraph 主图
 
 - **函数**: `build_agent_graph()` → `get_graph()`（全局编译单例）
-- **15 个注册节点**: normalize_input, load_short_term_context, route_task, vision_direct, vision_schema, vision_perceive, validate_direct, validate_schema, retrieve, reason, verify, respond, update_memory, fallback, tool_act_placeholder
+- **10 个注册节点**: normalize_input, load_short_term_context, route_task, react_decide, execute_tool, react_finish, respond, update_memory, fallback
 - **入口**: `normalize_input`
 - **条件边**:
-  - `route_after_task` → 按 RouteType + has_image 分发
-  - `route_after_reason` → need_verify ? verify : respond
-  - `route_after_verify` → 未通过且未超步数 ? reason（重试） : respond
+  - `route_after_task` → 所有请求 → react_decide（异常 → fallback）
+  - `should_call_tool` → 有工具调用 → execute_tool，否则 → react_finish
+  - `should_continue` → 未超步数 → react_decide（继续），否则 → react_finish
 - **Checkpointer**: `MemorySaver`（内存检查点，支持 thread_id 会话隔离）
 
 ### 6.5 `agent/nodes/` — 节点实现
@@ -482,19 +487,15 @@ graph TD
 | 文件 | 节点 | 职责 |
 |------|------|------|
 | `normalize.py` | `normalize_input` | 记录 Observation，推进状态到 NORMALIZED |
-| `load_context.py` | `load_short_term_context` | 调用 STM.get_recent_context()，注入 short_term_context（5 字段） |
-| `route.py` | `route_task` | L1 规则 + L2 DeepSeek V4 Flash |
-| `vision.py` | `vision_direct` | VLM 自然语言直答；若命中 `active_file.vlm_text`，改用已识别文本进行 cached image QA |
-| `vision.py` | `vision_schema` | VLM 结构化 JSON 提取；若命中 `active_file.structured_data`，复用缓存 |
-| `vision.py` | `vision_perceive` | VLM 感知（为 RAG_QA+图片 提供上下文）；若命中 `active_file.vlm_text`，不再调用 VLM |
-| `retrieve.py` | `retrieve` | 读取短期记忆 + 长期记忆，need_retrieve 门控 |
-| `reason.py` | `reason` | LLM 推理，拼接 VLM 感知 + STM 上下文，observer/tool 角色映射为 user |
-| `verify.py` | `validate_direct` | L1 规则校验（非空、无失败标记） |
-| `verify.py` | `validate_schema` | L1 规则校验（JSON 解析 + 字段格式） |
-| `verify.py` | `verify` | L2 LLM Verifier（passed/score/issues/revised_answer） |
+| `load_context.py` | `load_short_term_context` | STM 上下文 + LTM 检索 → short_term_context + memory_candidates |
+| `route.py` | `route_task` | L1 规则 + L2 LLM，所有请求 → TOOL_ACT |
+| `react_decide.py` | `react_decide` | LLM 推理决策：Thought → Action 或 Final Answer |
+| `react_execute.py` | `execute_tool_call` | 执行 pending_tool_call 中的工具，返回 Observation |
+| `react_execute.py` | `react_finish` | 写入 final_answer，标记 react_finished |
 | `respond.py` | `respond` | 确认 final_answer |
-| `memory.py` | `update_memory` | STM.write_from_state() + LTM 持久化（门控，失败不阻断） |
+| `memory.py` | `update_memory` | STM.write_from_state() + LTM 门控写入（失败不阻断） |
 | `fallback.py` | `fallback` | 兜底响应 |
+> VLM 图片分析由 `analyze_image` 工具（`app/tools/image_tools.py`）处理，复用 LlamaCppVLMEngine，缓存命中自动复用
 
 **节点契约**:
 ```python
@@ -514,7 +515,7 @@ def node_name(state: AgentState) -> dict:
 | `route_after_verify` | verify 后 | 未通过 + step_count < max_steps ? reason : respond |
 | `route_after_validation` | validate 后 | → respond |
 
-**关键逻辑**: RAG_QA + has_image → `vision_perceive`（先 VLM 感知再 LLM 推理）
+**关键逻辑**: 所有请求 → TOOL_ACT，LLM 自行决定是否调工具
 
 ### 6.7 `llm/` — LLM 客户端
 
@@ -529,12 +530,34 @@ def node_name(state: AgentState) -> dict:
 
 ### 6.8 `pipeline/` — VLM 引擎 + 提取管线
 
-- **文件**: `app/pipeline/llamacpp_vlm.py`
-- **实现**: `LlamaCppVLMEngine`，继承 `BaseVLMEngine`
-- **调用方式**: OpenAI 兼容 API → `http://127.0.0.1:8080/v1`
-- **图片格式**: base64 编码，`data:image/xxx;base64,...` 多模态消息
-- **模型**: MiniCPM-V，ctx_size=4096
-- **注意**: `model_name` 参数必须与 llama-server 实际模型名完全一致
+```mermaid
+graph TD
+    UPLOAD["POST /upload"] --> FILE["保存图片<br/>生成 SHA256"]
+    FILE --> ANALYZE["POST /files/analyze"]
+    ANALYZE --> CACHE{"image_analysis_cache<br/>按 SHA256 查缓存?"}
+    CACHE -->|命中| REUSE["直接返回<br/>vlm_text + structured_data"]
+    CACHE -->|未命中| VLM["llama.cpp VLM<br/>IMAGE_ANALYSIS_PROMPT"]
+    VLM --> PARSE["_parse_json_response"]
+    PARSE -->|JSON 解析成功| STORE["写入缓存<br/>structured_data_json"]
+    PARSE -->|非 JSON 兜底| STORE2["写入缓存<br/>{raw_output: text}"]
+    STORE --> RETURN["返回前端"]
+    STORE2 --> RETURN
+
+    CHAT["POST /chat<br/>带 image_path"] --> HASH["对图片算 SHA256"]
+    HASH --> LOOKUP{"image_analysis_cache<br/>查缓存?"}
+    LOOKUP -->|命中| DIRECT["Cached Image QA<br/>LLM 基于 vlm_text 回答<br/>0 VLM"]
+    LOOKUP -->|未命中| VLM2["vision_direct/vision_schema<br/>调用 VLM<br/>1 VLM"]
+```
+
+- **文件**: `app/pipeline/vlm.py`（接口 + 3 个 Prompt）、`llamacpp_vlm.py`（引擎实现）、`extractor.py`（管线）
+- **实现**: `LlamaCppVLMEngine`，继承 `BaseVLMEngine`，OpenAI 兼容 API → `http://127.0.0.1:8080/v1`
+- **模型**: MiniCPM-V，ctx_size=4096，图片 base64 编码
+- **三个 Prompt**:
+  - `IMAGE_ANALYSIS_PROMPT`：上传后预识别用，VLM 自动判断发票 vs 普通图片，统一 JSON 输出
+  - `INVOICE_EXTRACTION_PROMPT`：发票字段结构化提取（invoice_code/date/amount/items...）
+  - `GENERAL_IMAGE_PROMPT`：普通图片描述（summary/text_content/objects/layout）
+- **Extractor**: `text_input` 参数透传给 `analyze_image()` 作为 prompt
+- **日志**: VLM 识别完成后 `indent=4` 美观输出 structured_data JSON
 
 ### 6.9 `memory/` — 记忆系统
 
@@ -543,6 +566,16 @@ def node_name(state: AgentState) -> dict:
 | STM 数据模型 | `stm_schema.py` | 枚举 + Pydantic（对齐 STM Schema） | — |
 | 短期记忆 Store | `short_term.py` | 内存（session/turn/entry） | 单次会话，TTL 过期 |
 | 长期记忆 Store | `long_term.py` | SQLAlchemy + SQLite | 持久化 |
+| LTM 数据模型 | `ltm_schema.py` | 枚举 + Pydantic（Preference/Fact/Experience） | — |
+
+**LTM 核心功能**：
+- 三类记忆统一存储：Preference（偏好）/ Fact（事实）/ Experience（经验）
+- `upsert_memory()` 按 user_id + memory_type + normalized_key 去重合并
+- `retrieve_memories()` 关键词匹配 + 标签过滤 + importance 排序
+- `build_memory_candidates_from_state()`：简化版 Memory Gate。触发条件：① 用户显式指令（"记住/以后都这样/别忘了/保存/不要再"）② need_memory_write=True（路由关键词）。满足任一即生成 MemoryWriteCandidate（FACT + 可选 PREFERENCE），写入时按 user_id+memory_type+normalized_key 去重合并，version 递增 + ltm_memory_events 审计
+- `forget_memory()` 软遗忘 + 审计事件
+- 记忆变更审计：version 递增 + `ltm_memory_events` 记录
+- **旧表（Invoice/Conversation/Message/Preference/Reflection）已删除，全部由 LTM Schema 替代**
 
 **STM 核心功能**：
 - 会话生命周期管理（active/suspended/archived/expired）
@@ -639,10 +672,7 @@ chat.py (异常): fail_trace_run() → trace_failed
 | 场景 | action / purpose |
 |------|------------------|
 | 上传后一次性图片预识别 | `image_analysis_precompute` |
-| Agent 节点复用已识别图片内容 | `use_cached_image_analysis` |
-| VLM 直接图片问答 | `vlm_direct_answer` |
-| VLM 结构化提取 | `vlm_schema_extract` |
-| VLM 感知供 RAG_QA 使用 | `vlm_perceive` |
+| Agent 调用 analyze_image 工具 | `execute_tool` (tool_name=analyze_image) |
 
 ---
 
@@ -659,7 +689,10 @@ chat.py (异常): fail_trace_run() → trace_failed
 - [x] Python 3.10.18 运行环境
 - [x] 记忆门控写入（need_memory_write）
 - [x] Verify 门控（need_verify）
-- [ ] TOOL_ACT / ReAct 子图实现（V1）
+- [x] 7 个 ReAct 工具（web_search/wikipedia/calculator/time/analyze_image/tavily_extract/save_content）
+- [x] ReAct 思考模式自动切换（首步+失败 → enabled，成功 → disabled）
+- [x] ReAct 步数限制（tool_results 长度，不占前置节点配额）
+- [x] kb_documents 知识库表 + save_content 沉淀
 
 ### 8.2 API 层
 
@@ -732,13 +765,11 @@ chat.py (异常): fail_trace_run() → trace_failed
    - Trace 事件写入 / 查询
 2. **修复已知问题** — 见第 12 节
 
-### 阶段 B：V1 功能（规划中）
+### 阶段 B：当前优先级
 
-1. **TOOL_ACT 实现** — ReAct 子图（Thought → Action → Observation）
-2. **文档解析** — PDF / Word / Excel 多格式支持
-3. **语义检索** — Milvus 向量数据库替代关键词检索
-4. **Redis 短期记忆** — 替代内存 LRU
-5. **模型路由** — 按任务复杂度自动选择 Flash / Pro
+1. **知识库向量检索** — Milvus `kb_documents` 集合 + `retrieve` 节点集成
+2. **tavily_extract + save_content** — 网页提取 → SQLite + Milvus 双写
+3. **补充单元测试**
 
 ### 阶段 C：V2 远期（不做承诺）
 
@@ -789,20 +820,14 @@ chat.py (异常): fail_trace_run() → trace_failed
 - 解耦后可以独立扩展（如添加 span tree、跨请求聚合）
 - 前端 Timeline 从 Trace Event 派生，不直接解析 AgentState
 
-### ADR-005: 上传后图片预识别与 Cached Image QA
+### ADR-005: 图片分析工具化，缓存自动复用
 
-**决策**: 图片上传后通过 `/api/v0/files/analyze` 执行一次 VLM 预识别，识别结果写入 `image_analysis_cache`；后续同会话图片问答优先复用 `input_metadata.active_file.vlm_text`，必要时使用 LLM over recognized text 回答。
+**决策**: VLM 图片分析作为 ReAct 工具 `analyze_image` 实现。上传时预识别（SHA256 缓存），ReAct 中 LLM 自行调用工具，工具内部查缓存命中则 0 VLM。
 
 **原因**:
-- 避免每轮图片问答重复调用 VLM；
-- 保持 FastAPI 是唯一业务入口，Streamlit 只通过 HTTP 调用后端；
-- `vlm_text` 是图片可见文本 / 结构化识别结果，属于业务提取内容，不是 prompt、Chain-of-Thought 或模型原始调试输出；
-- 复杂图片问答可在不二次识别图片的前提下使用 LLM 推理。
-
-**后果**:
-- 原始 `VISION_DIRECT` 仍表示 `0 LLM + 1 VLM` 的直接图片问答；
-- 缓存命中后的图片问答单独视为 `Cached Image QA`，调用计数为 `1 LLM + 0 VLM`；
-- Trace 不新增协议外事件类型，通过 `model_call_completed` 和 `node_completed` 表达预识别与缓存复用。
+- 统一工具接口，LLM 自主判断是否需要看图
+- 缓存命中时无需 VLM，仅 LLM over cached text
+- 不再需要 VISION_DIRECT/VISION_SCHEMA 独立路径
 
 ### ADR-006: V0 不优先做复杂长期记忆
 
@@ -875,8 +900,7 @@ chat.py (异常): fail_trace_run() → trace_failed
 
 | 问题 | 严重程度 | 说明 |
 |------|----------|------|
-| TOOL_ACT 是占位节点 | 低 | 返回 `[TOOL_ACT 暂未实现]` |
-| ReAct 子图不存在 | 低 | V1 规划 |
+| 知识库仅 SQLite 存原文，无向量检索 | 低 | 待 Milvus 集成 |
 
 ### 12.2 代码质量问题
 

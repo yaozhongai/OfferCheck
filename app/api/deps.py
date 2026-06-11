@@ -17,13 +17,9 @@ from app.api.schemas import (  # noqa: F401   — re-export for route convenienc
     ErrorResponse,
     HealthResponse,
     MemoryListResponse,
-    MemoryQueryRequest,
-    PreferenceRequest,
-    PreferenceResponse,
     UploadResponse,
     ImageAnalysisRequest,
     ImageAnalysisResponse,
-    InvoiceRecord,
     StateMachineStatus,
 )
 from app.pipeline.extractor import ExtractionPipeline

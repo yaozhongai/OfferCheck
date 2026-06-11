@@ -22,6 +22,7 @@ from app.api.deps import (
 )
 from app.storage.database import get_session, init_db
 from app.storage.models import ImageAnalysisCache
+from app.pipeline.vlm import IMAGE_ANALYSIS_PROMPT
 from app.utils.logger_config import get_logger
 
 logger = get_logger("api_upload")
@@ -176,7 +177,7 @@ async def analyze_uploaded_file(request: ImageAnalysisRequest) -> ImageAnalysisR
             s.commit()
             return _cache_to_response(row, cached=False)
 
-        result = pipeline.extract(image_path=path, text_input="请完整识别图片中的票据/文档内容，保留关键字段和可见文本。")
+        result = pipeline.extract(image_path=path, text_input=IMAGE_ANALYSIS_PROMPT)
         elapsed = int((time.time() - t0) * 1000)
         row = cached or ImageAnalysisCache(file_id=file_id, file_sha256=file_sha256)
         row.session_id = request.session_id
@@ -185,15 +186,16 @@ async def analyze_uploaded_file(request: ImageAnalysisRequest) -> ImageAnalysisR
         row.content_type = request.content_type
         engine = getattr(pipeline, "_vlm_engine", None)
         row.model_name = getattr(engine, "model_name", None) or getattr(engine, "_model", "") or "vlm"
-        row.vlm_text = getattr(result, "raw_text", "") or ""
+        row.vlm_text = result.raw_text or ""
         row.status = "success"
         row.latency_ms = elapsed
         row.error_message = None
-        row.structured_data = getattr(result, "structured_data", {}) or {}
+        row.structured_data = result.structured_data or {}
         s.add(row)
         s.commit()
-        logger.info("图片识别完成 session=%s file=%s latency=%dms",
-                    request.session_id, request.filename, elapsed)
+        sd_len = len(result.structured_data.get("raw_output", "")) if result.structured_data else 0
+        logger.info("图片识别完成 session=%s file=%s latency=%dms vlm_text_len=%d structured_raw_len=%d",
+                    request.session_id, request.filename, elapsed, len(row.vlm_text), sd_len)
         return _cache_to_response(row, cached=False)
     except Exception as exc:
         s.rollback()

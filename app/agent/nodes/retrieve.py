@@ -1,7 +1,6 @@
 """retrieve — 长期记忆检索节点
 
-读取长期记忆（历史票据、偏好、历史消息），合成 retrieved_context。
-短期记忆上下文已由 load_short_term_context 注入，直接从 state 读取。
+读取 LTM（偏好 / 事实 / 经验）+ STM 上下文（已由 load_context 注入），合成 retrieved_context。
 """
 
 import time
@@ -16,7 +15,6 @@ def retrieve(state: AgentState) -> dict:
     t0 = time.time()
     step = state.get("step_count", 0) + 1
     route = state.get("route_result")
-    session_id = state.get("session_id", "")
 
     if route and not route.need_retrieve:
         return {
@@ -27,10 +25,9 @@ def retrieve(state: AgentState) -> dict:
         }
 
     ltm = get_long_term_memory()
-
     ctx_items = []
 
-    # ── 短期记忆上下文（由 load_short_term_context 注入，直接复用）──
+    # ── STM 上下文（load_short_term_context 注入）──
     short_term = state.get("short_term_context", [])
     for m in short_term[-6:]:
         ctx_items.append(EvidenceItem(
@@ -39,31 +36,29 @@ def retrieve(state: AgentState) -> dict:
             title="short_term",
         ))
 
-    # ── 长期记忆：偏好 ──
-    try:
-        prefs = ltm.get_all_preferences()
-        if prefs:
-            ctx_items.append(EvidenceItem(
-                source_type="memory",
-                content=str(prefs)[:300],
-                title="preferences",
-            ))
-    except Exception as exc:
-        logger.warning("偏好读取失败: %s", exc)
+    # ── LTM 检索 ──
+    user_id = state.get("user_id") or state.get("session_id", "")
+    query = state.get("user_input", "")
+    session_id = state.get("session_id", "")
+    request_id = state.get("request_id", "")
 
-    # ── 长期记忆：历史票据 ──
     try:
-        invoices = ltm.list_invoices(limit=3)
-        for inv in invoices:
+        patch = ltm.long_term_memory_patch(
+            user_id=user_id, query=query,
+            request_id=request_id, session_id=session_id,
+        )
+        ltm_items = patch.get("memory_candidates", [])
+        for item in ltm_items:
             ctx_items.append(EvidenceItem(
-                source_type="document",
-                content=f"发票 {inv.get('invoice_code', '')} 金额{inv.get('amount', '')} 日期{inv.get('invoice_date', '')}",
-                title=f"invoice_{inv.get('id', '')}",
+                source_type=item.get("source_type", "memory"),
+                content=item.get("content", "")[:300],
+                title=item.get("title", ""),
+                score=item.get("score"),
+                metadata=item.get("metadata", {}),
             ))
+        logger.info("RETRIEVE lt=%d st=%d", len(ltm_items), len(short_term))
     except Exception as exc:
-        logger.warning("历史票据读取失败: %s", exc)
-
-    logger.info("RETRIEVE lt=%d st=%d", len(ctx_items), len(short_term))
+        logger.warning("LTM 检索失败: %s", exc)
 
     return {
         "retrieved_context": ctx_items,

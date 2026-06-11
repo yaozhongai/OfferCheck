@@ -177,6 +177,7 @@ class DeepSeekClient(BaseLLMClient):
             temperature=temperature,
             max_tokens=max_tokens,
             stream=False,
+            **kwargs,
         )
 
         elapsed = (time.time() - t0) * 1000

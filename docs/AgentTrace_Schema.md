@@ -1,6 +1,6 @@
 # Agent Trace Schema 设计文档
 
-> 版本：V0.2 | 日期：2026-06-10 | 已实现：STM 上下文摘要通过 trace event 的 message / output_summary 字段对外展示
+> 版本：V0.3 | 日期：2026-06-10 | 已实现：STM 上下文 + LTM 检索 + Memory Write 事件通过 Trace 展示
 > 目标：为 Nexa Agent 的执行轨迹可视化、SSE 流式推送、节点调试和后续 ReAct 轨迹承载提供统一 Schema
 > 原则：AgentState 负责状态协议，Agent Trace 负责过程轨迹；两者边界清晰，不互相替代
 
@@ -719,7 +719,7 @@ class ToolCallTracePayload(BaseModel):
 | `vision_perceive` | `node_started` / `model_call_started` / `model_call_completed` / `node_completed` | `ModelCallTracePayload` |
 | `validate_direct` | `node_started` / `validation_completed` / `node_completed` | `ValidationTracePayload` |
 | `validate_schema` | `node_started` / `validation_completed` / `node_completed` | `ValidationTracePayload` |
-| `retrieve` | `node_started` / `retrieval_completed` / `node_completed` | `RetrievalTracePayload`（读 LTM） |
+| `retrieve` | `node_started` / `retrieval_completed` / `node_completed` | `RetrievalTracePayload`（读 LTM: MemoryItem → EvidenceItem → retrieved_context） |
 | `reason` | `node_started` / `model_call_started` / `model_call_completed` / `node_completed` | `ModelCallTracePayload` |
 | `verify` | `node_started` / `model_call_started` / `validation_completed` / `node_completed` | `ValidationTracePayload` |
 | `respond` | `node_started` / `node_completed` | final_answer 摘要 |

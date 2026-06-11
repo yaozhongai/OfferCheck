@@ -1,13 +1,12 @@
-"""load_short_term_context — 加载短期记忆上下文
+"""load_short_term_context — 加载上下文（STM + LTM）
 
-调用 ShortTermMemory.get_recent_context()，注入 AgentState.short_term_context。
-输出格式对齐 STM Schema §6.6 — 5 核心字段。
-Trace 中展示加载的 STM 内容摘要。
+STM: ShortTermMemory.get_recent_context() → short_term_context
+LTM: LongTermMemory.long_term_memory_patch() → memory_candidates
 """
 
 import time
 from app.agent.state import AgentState, StepStatus, trace_patch
-from app.api.deps import get_short_term_memory
+from app.api.deps import get_short_term_memory, get_long_term_memory
 from app.utils.logger_config import get_logger
 
 logger = get_logger("node.load_context")
@@ -17,6 +16,7 @@ def load_short_term_context(state: AgentState) -> dict:
     t0 = time.time()
     step = state.get("step_count", 0) + 1
     session_id = state.get("session_id", "")
+    request_id = state.get("request_id", "")
 
     try:
         stm = get_short_term_memory()
@@ -56,15 +56,30 @@ def load_short_term_context(state: AgentState) -> dict:
         # ── 构建 Trace 可见的上下文摘要 ──
         context_summary = _build_context_summary(result_items)
 
-        logger.info("LOAD_CONTEXT session=%s items=%d %dms | %s",
-                     session_id, len(result_items), elapsed, context_summary["preview"])
+        # ── LTM 检索 ──
+        ltm_items = 0
+        try:
+            ltm = get_long_term_memory()
+            uid = state.get("user_id") or session_id
+            patch = ltm.long_term_memory_patch(
+                user_id=uid, query=state.get("user_input", ""),
+                request_id=request_id, session_id=session_id,
+            )
+            ltm_items = len(patch.get("memory_candidates", []))
+        except Exception as exc:
+            logger.warning("LTM 检索失败: %s", exc)
+            patch = {"memory_candidates": []}
+
+        logger.info("LOAD_CONTEXT session=%s stm=%d ltm=%d %dms | %s",
+                     session_id, len(result_items), ltm_items, elapsed, context_summary["preview"])
 
         return {
             "short_term_context": result_items,
+            "memory_candidates": patch.get("memory_candidates", []),
             **trace_patch(
                 step=step, node="load_short_term_context", action="load_context",
                 status=StepStatus.SUCCESS,
-                reason=f"loaded {len(result_items)} items, {context_summary['turn_count']} turns, ~{context_summary['total_chars']} chars",
+                reason=f"stm={len(result_items)} ltm={ltm_items}",
                 output_summary=context_summary["preview"],
                 latency_ms=elapsed,
             ),

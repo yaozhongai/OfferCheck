@@ -6,16 +6,13 @@
 
 ## 简介
 
-Nexa Agent V0 是一个 **LangGraph 原生、两层路由驱动、带完整 Trace 的多路径 Agent 系统**，专注于多模态票据/图片/文档识别与问答。
+Nexa Agent V0 是一个 **LangGraph 原生 ReAct Agent 系统**，所有请求统一走 TOOL_ACT (ReAct) 路径，LLM 自行判断是否需要调工具。专注于多模态票据/图片/文档识别与问答。
 
 ```
-图片 → VLM 直答 (0 LLM, ~0.5s)
-上传图片 → 一次 VLM 预识别 → 后续图片问答复用 vlm_text (0 VLM, 1 LLM)
-文本 → RAG_QA: 检索 → LLM (~2-5s)
-图片+复杂推理 → VLM 感知 → LLM 推理 → Verifier (~5-15s)
+所有请求 → route_task → TOOL_ACT (ReAct)
+  react_decide (LLM 规划) ⇄ execute_tool (工具执行) → finish
+  工具: web_search / wikipedia / calculator / time / analyze_image (VLM)
 ```
-
-**Direct First, Agent When Needed。** 首次图片理解优先由 VLM 完成，后续同会话图片问答优先复用已识别内容；VLM 能直答的不走 LLM，简单问答不反思，临时图片不写长期记忆。
 
 ### 核心能力
 
@@ -23,10 +20,10 @@ Nexa Agent V0 是一个 **LangGraph 原生、两层路由驱动、带完整 Trac
 - 上传后图片预识别缓存：`POST /api/v0/files/analyze` + `image_analysis_cache`
 - Cached Image QA：同会话追问复用 `active_file.vlm_text`，避免重复调用 VLM
 - 票据字段结构化提取：JSON 输出 + 基础校验
-- RAG 检索增强：STM（会话上下文，Turn 级别裁剪）+ LTM（历史票据/偏好）分层检索
-- STM 每轮对话始终写入，LTM 按 need_memory_write 门控
-- Trace 可视化：Trace Events / Timeline / SSE，STM 上下文摘要同步展示
-- Streamlit Chat UI：上传预览、会话上下文图片、Markdown 回答渲染
+- ReAct Agent 工具集：web_search / wikipedia / calculator / analyze_image / tavily_extract / save_content
+- STM 会话上下文 + LTM 长期记忆 + KB 知识库分层检索
+- Trace 可视化：Trace Events / Timeline / SSE
+- Streamlit Chat UI
 
 ---
 
@@ -58,29 +55,23 @@ python -m app.cli -b kimi -m "是否可以报销" -i invoice.jpg
 
 ```
 app/
-├── agent/          LangGraph 原生状态图 (StateGraph + TypedDict + Reducer)
+├── agent/          LangGraph ReAct Agent (TOOL_ACT + FALLBACK)
+├── tools/          ReAct 工具 (web_search/wikipedia/calculator/time/analyze_image/tavily_extract/save_content)
 ├── trace/          Trace 事件系统 (SSE + Timeline + SQLAlchemy)
-├── storage/        持久化层 (SQLAlchemy ORM)
+├── storage/        持久化层 (SQLAlchemy: trace + LTM + KB)
 ├── llm/            DeepSeek V4 / Kimi K2.6 / GLM-5.1
 ├── pipeline/       llama.cpp VLM (MiniCPM-V) + 提取管线
 ├── api/            FastAPI (chat / upload / files/analyze / memory / trace)
-├── memory/         短期记忆 STM Schema + 长期记忆 LTM
-│   ├── stm_schema.py   数据模型（枚举 + Pydantic）
-│   ├── short_term.py   STM Store（Session/Turn/Entry，Turn 级别裁剪）
-│   └── long_term.py    LTM Store（SQLAlchemy CRUD）
-└── utils/          路由规则 + 校验 + 日志
+├── memory/         STM Schema + LTM Schema
 ```
 
 ### 执行路径
 
-| 路径 | 场景 | LLM | VLM | STM |
-|------|------|-----|-----|-----|
-| VISION_DIRECT | 图片直答 (金额多少?) | 0 | 1 | ✅ |
-| Cached Image QA | 已有 `vlm_text` 的图片追问 | 1 | 0 | ✅ |
-| VISION_SCHEMA | 提取发票字段 | 0 | 1 | ✅ |
-| RAG_QA | 文本问答 + 复杂推理 | 1-2 | 0-1 | ✅ |
-| TOOL_ACT | 工具执行 (V1 预留) | — | — | — |
-> STM 每轮始终写入，LTM 仅 VISION_SCHEMA 写入票据
+| 路径 | 场景 | LLM | VLM | 工具 |
+|------|------|-----|-----|------|
+| TOOL_ACT | 全部请求 (ReAct Agent) | 1-6 | 0-1 | 0-5 |
+| FALLBACK | 异常兜底 | 0 | 0 | 0 |
+> ReAct 循环最多 6 步，LLM 自行判断是否需要调工具
 
 ### API
 
@@ -92,6 +83,7 @@ app/
 | `GET /api/v0/trace/{id}/events` | Trace 事件明细 |
 | `GET /api/v0/trace/{id}/timeline` | 前端时间线 |
 | `GET /api/v0/trace/{id}/stream` | Trace SSE |
+| `GET/DELETE/PATCH /api/v0/memory/ltm` | LTM 记忆管理（查看/遗忘/修改） |
 | `GET /api/v0/health` | 后端、LLM、VLM 健康状态 |
 
 ### LLM / VLM 支持
@@ -131,4 +123,5 @@ app/
 | [AgentState_SchemaV2.md](docs/AgentState_SchemaV2.md) | 状态协议 |
 | [AgentTrace_Schema.md](docs/AgentTrace_Schema.md) | Trace 协议 |
 | [Short-Term_Memory_Schema.md](docs/Short-Term_Memory_Schema.md) | 短期记忆协议 |
+| [Long-Term_Memory_Schema.md](docs/Long-Term_Memory_Schema.md) | 长期记忆协议 |
 | [SPEC.md](SPEC.md) | 项目规范与当前实现约束 |

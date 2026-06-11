@@ -52,6 +52,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     state = create_initial_state(
         user_input=request.message,
         session_id=request.session_id,
+        user_id=request.user_id,
         image_refs=imgs,
         input_metadata=request.metadata or {},
     )

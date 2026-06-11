@@ -1,6 +1,6 @@
 # Nexa Agent V0 — 技术架构文档
 
-> 版本：V3.4 | 日期：2026-06-10 | 架构：LangGraph 原生 + 两层路由 + Trace + STM Schema
+> 版本：V4.0 | 日期：2026-06-11 | 架构：LangGraph 原生 + TOOL_ACT (ReAct) + FALLBACK + STM/LTM
 
 ---
 
@@ -21,15 +21,14 @@ app/
 │   ├── graph.py                # build_agent_graph() → compiled StateGraph
 │   ├── routers.py              # conditional edge
 │   └── nodes/
-│       ├── normalize.py        # 归一化 (Observation + 状态推进)
-│       ├── load_context.py     # 加载短期记忆上下文
-│       ├── route.py            # L1 规则 + L2 DeepSeek V4 Flash
-│       ├── vision.py           # VLM 直答 / 结构化 / 感知
-│       ├── retrieve.py         # 记忆检索
-│       ├── reason.py           # LLM 推理
-│       ├── verify.py           # L1 规则校验 + L2 LLM Verifier
+│       ├── normalize.py        # 归一化
+│       ├── load_context.py     # 加载上下文 (STM + LTM)
+│       ├── route.py            # L1 规则 + L2 LLM 路由
+│       ├── react_decide.py     # ReAct 推理决策
+│       ├── react_execute.py    # 工具执行 + finish
+│       ├── react_routers.py    # ReAct 条件路由
 │       ├── respond.py          # 最终响应
-│       ├── memory.py           # 记忆持久化 (门控，含异常保护)
+│       ├── memory.py           # 记忆持久化
 │       └── fallback.py         # 兜底
 ├── trace/                      # Trace 事件系统
 │   ├── schema.py               # Trace 枚举 + 模型 + Payload
@@ -49,10 +48,11 @@ app/
 │       ├── upload.py           # POST /api/v0/upload
 │       ├── memory.py           # GET /api/v0/memory/*
 │       └── trace.py            # GET /api/v0/trace/* (SSE + Timeline)
-├── memory/                     # 短期记忆 (STM Schema) + 长期记忆
-│   ├── stm_schema.py           # 枚举 + Pydantic 模型
-│   ├── short_term.py           # STM Store (turn/entry/session)
-│   └── long_term.py            # LTM Store (SQLAlchemy CRUD)
+├── memory/                     # STM Schema + LTM Schema
+│   ├── stm_schema.py           # STM 枚举 + Pydantic
+│   ├── short_term.py           # STM Store (Turn/Entry/Session)
+│   ├── ltm_schema.py           # LTM 枚举 + Pydantic (Preference/Fact/Experience)
+│   └── long_term.py            # LTM Store (MemoryItem/Event/Forget + Gate)
 ├── pipeline/                   # llama.cpp VLM 引擎 + 提取管线
 ├── utils/                      # 日志 + 路由规则 + 校验
 ├── main.py / cli.py / streamlit_app.py
@@ -64,35 +64,30 @@ app/
 ## 3. 两层路由 + 5 条路径
 
 ```
-normalize_input → load_short_term_context → route_task (L1规则 + L2 DeepSeek V4 Flash)
+normalize_input → load_short_term_context → route_task
                       │
-        ┌─────────────┼─────────────┬──────────────┐
-        ▼             ▼             ▼              ▼
-  VISION_DIRECT  VISION_SCHEMA    RAG_QA       TOOL_ACT
-        │             │             │              │
-   vlm_direct    vlm_schema    vision_perceive   占位
-        │             │        (有图时)            │
-   validate_dir  validate_sch     │               │
-        │             │        retrieve            │
-        └─────┬───────┘           │               │
-              │                reason              │
-              │               ┌──┴──┐              │
-              ▼               │verify│(need_verify)│
-           respond ←──────────┴─────┘              │
-              │                                    │
-         update_memory ←───────────────────────────┘
+          ┌───────────┴───────────┐
+          ▼                       ▼
+      TOOL_ACT                 FALLBACK
+          │                       │
+    react_decide              respond
+      ⇄ 工具执行 ⇄
+    react_finish
+          │
+       respond
+          │
+    update_memory
               │
             END
 ```
 
-| 路径 | LLM | VLM | Verify | STM | LTM |
-|------|-----|-----|--------|-----|-----|
-| VISION_DIRECT | 0 | 1 | ❌ | ✅ | ❌ |
-| VISION_SCHEMA | 0 | 1 | ❌ | ✅ | ✅ |
-| RAG_QA (纯文本) | 1 | 0 | ❌ | ✅ | ❌ |
-| RAG_QA (有图+推理) | 1-2 | 1 | ✅ | ✅ | ❌ |
-| TOOL_ACT | — | — | — | — | V1 |
-> **STM 每轮始终写入，LTM 仅 need_memory_write=True 时写入。**
+| 路径 | LLM | VLM | 工具 | STM | LTM |
+|------|-----|-----|------|-----|-----|
+| TOOL_ACT (简单) | 1 | 0 | 0 | ✅ | ❌ |
+| TOOL_ACT (+搜索) | 2-3 | 0 | 1-2 | ✅ | ❌ |
+| TOOL_ACT (+图片) | 1-2 | 0-1 | 1 | ✅ | ❌ |
+| FALLBACK | 0 | 0 | 0 | ✅ | ❌ |
+> STM 每轮始终写入，LTM 由记忆门控控制。
 
 ---
 
