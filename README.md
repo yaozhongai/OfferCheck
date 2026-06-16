@@ -1,12 +1,12 @@
 # Nexa Agent
 
-> LangGraph 原生多路径 Agent — V0: 发票 / 图片 / 文档识别与问答
+> LangGraph 原生多路径 Agent — 多模态识别、问答与自进化推理
 
 ---
 
 ## 简介
 
-Nexa Agent V0 是一个 **LangGraph 原生 ReAct Agent 系统**，所有请求统一走 TOOL_ACT (ReAct) 路径，LLM 自行判断是否需要调工具。专注于多模态票据/图片/文档识别与问答。
+Nexa Agent 是一个 **LangGraph 原生 ReAct Agent 系统**，所有请求统一走 TOOL_ACT (ReAct) 路径，LLM 自行判断是否需要调工具。专注于多模态票据/图片/文档识别与问答。
 
 ```
 所有请求 → route_task → TOOL_ACT (ReAct)
@@ -56,7 +56,7 @@ python -m app.cli -b kimi -m "是否可以报销" -i invoice.jpg
 ```
 app/
 ├── agent/          LangGraph ReAct Agent (TOOL_ACT + FALLBACK)
-├── tools/          ReAct 工具 (web_search/wikipedia/calculator/time/analyze_image/tavily_extract/save_content)
+├── tools/          ReAct 工具 (web_search / wikipedia / calculator / time / analyze_image / tavily_extract / save_content)
 ├── trace/          Trace 事件系统 (SSE + Timeline + SQLAlchemy)
 ├── storage/        持久化层 (SQLAlchemy: trace + LTM + KB)
 ├── llm/            DeepSeek V4 / Kimi K2.6 / GLM-5.1
@@ -120,6 +120,7 @@ app/
 |------|------|
 | [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 三阶段开发规划 |
 | [TECHNICAL_ARCHITECTURE.md](docs/TECHNICAL_ARCHITECTURE.md) | 技术架构 |
+| [SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) | 系统功能全景 |
 | [AgentState_SchemaV2.md](docs/AgentState_SchemaV2.md) | 状态协议 |
 | [AgentTrace_Schema.md](docs/AgentTrace_Schema.md) | Trace 协议 |
 | [Short-Term_Memory_Schema.md](docs/Short-Term_Memory_Schema.md) | 短期记忆协议 |
