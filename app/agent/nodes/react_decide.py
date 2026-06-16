@@ -58,7 +58,11 @@ def _parse_response(text: str) -> dict:
             tool_match = re.match(r"(\w+)\s*\(\s*(.*?)\s*\)\s*$", action_text, re.DOTALL)
             if tool_match:
                 result["action"] = tool_match.group(1)
-                result["action_args"] = tool_match.group(2).strip()
+                args = tool_match.group(2).strip()
+                # 去掉 LLM 可能添加的首尾引号
+                if len(args) >= 2 and args[0] == args[-1] and args[0] in ('"', "'"):
+                    args = args[1:-1]
+                result["action_args"] = args
             else:
                 result["action"] = action_text
 
