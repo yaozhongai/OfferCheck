@@ -1,6 +1,6 @@
 # Nexa Agent
 
-> LangGraph 原生多路径 Agent — 多模态识别、问答与自进化推理
+> LangGraph 原生多路径 Agent — 多模态识别与问答
 
 ---
 
@@ -120,7 +120,6 @@ app/
 |------|------|
 | [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 三阶段开发规划 |
 | [TECHNICAL_ARCHITECTURE.md](docs/TECHNICAL_ARCHITECTURE.md) | 技术架构 |
-| [SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) | 系统功能全景 |
 | [AgentState_SchemaV2.md](docs/AgentState_SchemaV2.md) | 状态协议 |
 | [AgentTrace_Schema.md](docs/AgentTrace_Schema.md) | Trace 协议 |
 | [Short-Term_Memory_Schema.md](docs/Short-Term_Memory_Schema.md) | 短期记忆协议 |
