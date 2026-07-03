@@ -43,7 +43,6 @@ class EvalResult:
 
     Attributes:
         success: 是否成功
-        confidence: 置信度 [0, 1]
         reason: 判定理由
         feedback_signal: 反馈信号（传给反思模型）
         failure_mode: 失败模式分类（仅失败时有效）
@@ -51,7 +50,6 @@ class EvalResult:
         llm_result: LLM 评估的原始结果
     """
     success: bool
-    confidence: float
     reason: str
     feedback_signal: str = ""
     failure_mode: Optional[str] = None
@@ -289,7 +287,6 @@ class Evaluator:
         if terminated_reason in ("llm_error", "parse_error"):
             return EvalResult(
                 success=False,
-                confidence=0.95,
                 reason=f"执行异常终止: {terminated_reason}",
                 feedback_signal=f"Agent 执行过程中发生错误: {terminated_reason}。"
                                f"错误信息: {answer[:200]}",
@@ -318,7 +315,6 @@ class Evaluator:
             if result:
                 return EvalResult(
                     success=False,
-                    confidence=0.85,
                     reason=result["reason"],
                     feedback_signal=f"启发式检测 [{result['failure_mode']}]: {result['reason']}",
                     failure_mode=result["failure_mode"],
@@ -329,7 +325,6 @@ class Evaluator:
         if terminated_reason == "max_steps":
             return EvalResult(
                 success=False,
-                confidence=0.7,
                 reason="达到最大步数限制",
                 feedback_signal="Agent 在最大步数内未能完成任务，可能需要更多步骤或不同的搜索策略。",
                 failure_mode="context_overflow",
@@ -337,7 +332,6 @@ class Evaluator:
 
         return EvalResult(
             success=True,
-            confidence=0.6,
             reason="启发式规则未检测到明显失败信号",
             feedback_signal="",
         )
@@ -361,7 +355,6 @@ class Evaluator:
 
             return EvalResult(
                 success=success,
-                confidence=parsed.get("confidence", 0.7),
                 reason=reason,
                 feedback_signal=parsed.get("feedback", ""),
                 failure_mode=parsed.get("failure_mode") if not success else None,
@@ -411,8 +404,7 @@ class Evaluator:
 {criteria}
 
 请输出 JSON 格式（不要输出其他内容）：
-{{"success": true/false, "confidence": 0.0~1.0, "reason": "简要判定理由", "feedback": "如果失败，给出具体反馈；如果成功，留空", "failure_mode": "如果失败，选择: context_overflow/premature_answer/loop/tool_misuse/wrong_reasoning/null"}}\
-"""
+{{"success": true/false, "reason": "判定理由（1-2句）", "feedback": "如果失败，给出具体反馈；如果成功，留空", "failure_mode": "如果失败，选择: context_overflow/premature_answer/loop/tool_misuse/wrong_reasoning/null"}}"""
 
     def _parse_llm_eval_response(self, response: str) -> dict:
         """解析 LLM 评估的 JSON 响应"""
@@ -428,9 +420,9 @@ class Evaluator:
         response_lower = response.lower()
         if any(w in response_lower for w in ["成功", "success", "正确", "充分"]):
             if not any(w in response_lower for w in ["但是", "然而", "however", "失败", "fail"]):
-                return {"success": True, "confidence": 0.7, "reason": response[:200], "feedback": ""}
+                return {"success": True, "reason": response[:200], "feedback": ""}
 
-        return {"success": False, "confidence": 0.5, "reason": response[:200],
+        return {"success": False, "reason": response[:200],
                 "feedback": response[:300], "failure_mode": "wrong_reasoning"}
 
     # ── 混合评估 ──
@@ -465,19 +457,14 @@ class Evaluator:
 
             if llm.success:
                 # 答案通过：过程问题记为 warning 但不否决
-                confidence = llm.confidence
-                reason = llm.reason
                 if not heuristic.success:
-                    confidence *= 0.85  # 过程有问题则降低置信度
                     reason = f"答案质量通过（过程存在 {heuristic.failure_mode} 问题）: {llm.reason}"
-                    logger.info("Hybrid: 答案通过，过程有 %s，置信度降为 %.2f",
-                                heuristic.failure_mode, confidence)
+                    logger.info("Hybrid: 答案通过，过程有 %s", heuristic.failure_mode)
                 else:
                     reason = f"启发式 + LLM 双重确认通过: {llm.reason}"
 
                 return EvalResult(
                     success=True,
-                    confidence=confidence,
                     reason=reason,
                     heuristic_result=heuristic.__dict__ if hasattr(heuristic, '__dict__') else None,
                     llm_result=llm.llm_result,
@@ -487,7 +474,6 @@ class Evaluator:
                 failure_mode = llm.failure_mode or heuristic.failure_mode or "wrong_reasoning"
                 return EvalResult(
                     success=False,
-                    confidence=llm.confidence,
                     reason=f"LLM 判定答案质量不足: {llm.reason}",
                     feedback_signal=llm.feedback_signal,
                     failure_mode=failure_mode,
@@ -509,7 +495,6 @@ class Evaluator:
             if llm.success:
                 return EvalResult(
                     success=True,
-                    confidence=llm.confidence * 0.8,
                     reason=f"启发式存疑但 LLM 复审通过: {llm.reason}",
                     heuristic_result={"heuristic_failed": heuristic.failure_mode},
                     llm_result=llm.llm_result,
@@ -522,14 +507,12 @@ class Evaluator:
         if llm.success:
             return EvalResult(
                 success=True,
-                confidence=max(heuristic.confidence, llm.confidence),
                 reason=f"启发式 + LLM 双重确认通过: {llm.reason}",
                 heuristic_result=heuristic.__dict__ if hasattr(heuristic, '__dict__') else None,
                 llm_result=llm.llm_result,
             )
         return EvalResult(
             success=False,
-            confidence=llm.confidence,
             reason=f"LLM 评估判定失败: {llm.reason}",
             feedback_signal=llm.feedback_signal,
             failure_mode=llm.failure_mode or heuristic.failure_mode,

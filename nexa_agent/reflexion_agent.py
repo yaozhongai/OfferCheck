@@ -369,9 +369,9 @@ class ReflexionReActAgent:
                 # Verifier 通过或跳过 → 成功返回
                 if verdict is None or verdict.passed:
                     if verbose:
-                        print(f"\n✅ Trial {trial} 成功! (置信度: {eval_result.confidence:.0%})")
-                    logger.info("Reflexion 成功 trial=%d confidence=%.2f elapsed=%.1fs",
-                                trial, eval_result.confidence, trial_elapsed)
+                        print(f"\n✅ Trial {trial} 成功!")
+                    logger.info("Reflexion 成功 trial=%d elapsed=%.1fs",
+                                trial, trial_elapsed)
                     stop_run_log()
                     return ReflexionResult(
                         success=True,

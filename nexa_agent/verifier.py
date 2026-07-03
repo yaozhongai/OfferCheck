@@ -350,7 +350,7 @@ class VerifierAgent:
                 {"role": "system", "content": "你是事实核查员。只输出 JSON，不要输出其他内容。"},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": 256,
+            "max_tokens": 768,
             "temperature": 0.0,
             "stream": False,
         }

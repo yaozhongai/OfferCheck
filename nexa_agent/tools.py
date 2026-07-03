@@ -163,6 +163,28 @@ def _get_param_description(name: str, meta: dict) -> str:
 
 
 # ==========================================================================
+# 登录墙域名列表（web_fetch 遇到这些域名时跳过抓取，引导用 web_search）
+# ==========================================================================
+
+_LOGIN_WALL_DOMAINS = frozenset({
+    "x.com", "twitter.com",
+    "linkedin.com",
+    "facebook.com", "fb.com",
+    "instagram.com",
+})
+
+
+def _is_login_wall(url: str) -> bool:
+    """判断 URL 是否属于登录墙域名（需登录才能访问完整内容）。"""
+    from urllib.parse import urlparse
+    try:
+        netloc = urlparse(url).netloc.lower().removeprefix("www.")
+        return any(netloc == d or netloc.endswith("." + d) for d in _LOGIN_WALL_DOMAINS)
+    except Exception:
+        return False
+
+
+# ==========================================================================
 # 工具实现
 # ==========================================================================
 
@@ -202,6 +224,18 @@ def web_search(query: str) -> str:
 
     if not results:
         return f"未找到与 '{query}' 相关的结果（所有搜索 provider 均无结果或不可用）。"
+
+    # URL 去重：相同 URL 只保留第一条（多 provider 降级时可能出现重复）
+    _seen_result_urls: set[str] = set()
+    deduped: list = []
+    for r in results:
+        nu = r.url.lower().rstrip("/")
+        if nu not in _seen_result_urls:
+            _seen_result_urls.add(nu)
+            deduped.append(r)
+    if len(deduped) < len(results):
+        logger.info("web_search URL 去重: %d → %d 条", len(results), len(deduped))
+    results = deduped
 
     # 增强层：对摘要偏弱的 provider（如自建 SearXNG / DDG）抓取正文补齐
     if SEARCH_CONFIG["enrich_enabled"] and provider in SEARCH_CONFIG["enrich_providers"]:
@@ -865,6 +899,17 @@ def web_fetch(url: str) -> str:
     _p = _urlparse(url)
     if not _p.netloc or _p.netloc.startswith("file:"):
         return f"[错误] web_fetch: 无效 URL '{url[:100]}'。请提供标准的 http/https URL（如 https://example.com/page）。"
+
+    # 登录墙拦截：这些域名需要登录才能访问，Jina/trafilatura 均无法绕过
+    if _is_login_wall(url):
+        from urllib.parse import urlparse as _up
+        domain = _up(url).netloc.lower()
+        logger.info("web_fetch 登录墙拦截 domain=%s url=%s", domain, url)
+        return (
+            f"[系统提示] {domain} 需要登录才能访问完整内容，无法直接抓取。\n"
+            f"请改用 web_search 搜索相关关键词获取公开信息，例如：\n"
+            f'  web_search("{domain.split(".")[0]} [你要查的人名/职位/关键词]")'
+        )
 
     logger.info("web_fetch 调用 url=%s", url)
 

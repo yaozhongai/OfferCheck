@@ -600,6 +600,8 @@ def react_loop(
     seen_urls: set[str] = set()
     # 步数预警：OfferCheck stage 下在步数耗尽前注入一次 submit_verdict 提示
     _near_limit_warned = False
+    # 跨步硬缓存：tool_name + normalized_args → observation（去重，防冗余调用）
+    _tool_cache: dict[str, str] = {}
 
     print(f"\n{'='*60}")
     print(f"🚀 ReAct Agent 启动 (tool calling 模式)")
@@ -795,8 +797,18 @@ def react_loop(
                 _emit("action", step=step_count, tool=tool_name, args=tool_args[:300],
                       thought=(content[:500] if tc is msg.tool_calls[0] and content else ""))
 
-                observation = execute_tool(tool_name, tool_args)
-                last_tool_success = not observation.startswith("[错误]")
+                # ── 跨步硬缓存：相同工具+参数直接返回上次结果，节省步数和 tokens ──
+                _cache_key = f"{tool_name}:{tool_args.strip().lower()}"
+                if _cache_key in _tool_cache:
+                    cached_obs = _tool_cache[_cache_key]
+                    observation = f"[缓存] 该查询已在本轮调查中执行过，直接返回缓存结果：\n{cached_obs}"
+                    logger.info("Step %d: 工具缓存命中 key=%s...", step_count, _cache_key[:60])
+                    last_tool_success = True
+                else:
+                    observation = execute_tool(tool_name, tool_args)
+                    last_tool_success = not observation.startswith("[错误]")
+                    if last_tool_success:
+                        _tool_cache[_cache_key] = observation
 
                 # 强制取证 gate：累计成功的检索类工具调用
                 if last_tool_success and tool_name in _RETRIEVAL_TOOLS:
