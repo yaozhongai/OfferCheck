@@ -1,6 +1,6 @@
 # Nexa Agent / OfferCheck — 项目规格（SPEC）
 
-> 版本：v3（2026-07-03） | 维护：本文件是项目的「宪法」，记录**核心目标 / 明确不做 / 关键决策与理由**。
+> 版本：v4（2026-07-03） | 维护：本文件是项目的「宪法」，记录**核心目标 / 明确不做 / 关键决策与理由**。
 > 每次重大方向或架构决策后必须回来更新；带 `TODO(补充)` 的小节留待推进时填。
 > 配套文档：飞书《OfferCheck 参赛方案与开发计划》（wiki AUwFwSk3oiTf0ik12kgca9HZnVh）、
 > [docs/agent_paradigms_and_hallucination.md](docs/agent_paradigms_and_hallucination.md)、
@@ -124,6 +124,7 @@
 - **Evaluator 校准（stage-aware）**：`evaluate()` / `_build_llm_eval_prompt()` 加 `stage` 参数；stage4 使用 OfferCheck 专用评估标准（三态裁定 + 证据链 + red_flags），LLM 评估结果记 INFO 日志；stage4 端测 trial 1 成功（置信度 90%）
 - **Verifier 校准（全量完成）**：stage-aware 来源标准（stage4 宽松媒体来源 + 放行规则）；**CoVe factored**：`_llm_verify` 改为逐条事实独立评判（单次 LLM，per-fact JSON 输出）+ `_parse_cove_response` 解析；**三态 VerdictResult**：`status: "verified"|"unverified"|"failed"` 替代 `passed: bool`（`.passed` 属性保持向后兼容）；端测 status=verified，置信度 90%
 - **submit_verdict 步数预警**：在剩余 ≤1 步时向对话注入一次 user 提示，催 agent 调用 `submit_verdict` 而非触发兜底汇总；端测从"12步触发兜底"改善为"10步主动 submit_verdict"
+- **Evaluator 去 confidence**：`EvalResult` 删除 `confidence: float` 字段，LLM 只输出 `success/reason/feedback/failure_mode`；消除 LLM 自评置信度带来的虚假精度
 
 **未建成 / 规划中 ⬜**（详见 §5）
 - offercheck stage2/stage3 prompt、company_registry_search 工具、eval_suite 标注案例集
@@ -138,7 +139,7 @@
 > 推进到对应项时，把设计细节 / 决策理由回填到这里，并更新 §3 / §4。
 
 - **Verifier 校准（P6）**：✅ 已完成。stage-aware 标准 + CoVe factored 逐条评判 + 三态 VerdictResult。详见 §4。
-- `TODO(补充)` **检索工具优化（P0/P1）**：跨步硬缓存去重 + 检索溯源 registry（同时服务 AIS）；trafilatura 装齐 + 登录墙域名策略；结果去重/轻量重排；Corrective 再检索。
+- **检索工具优化（P0/P1）**：✅ 已完成核心项。react_loop 跨步硬缓存（同 tool+args 直接命中缓存）；web_fetch 登录墙拦截（x.com/linkedin 等 blocklist）；web_search URL 去重；trafilatura 安装完成。未做：Corrective 再检索、轻量重排（当前优先级不高）。
 - `TODO(补充)` **offercheck eval_suite**：15~20 个真实+模拟诈骗/正常案例（带 expected_verdict）+ 裁定级评分（准确率/误报率/拒答率）；接入 Eval Harness 回归门禁。
 - `TODO(补充)` **stage2/stage3 场景层**：简历定向 prompt；沟通证伪 prompt + company_registry_search。
 - `TODO(补充)` **前端四阶段 + 部署**：选岗/简历/沟通/offer 页面；Vercel + 后端部署；≥6 截图；3 分钟 demo 视频；GMI 调用证明素材。
