@@ -125,6 +125,8 @@
 - **Verifier 校准（全量完成）**：stage-aware 来源标准（stage4 宽松媒体来源 + 放行规则）；**CoVe factored**：`_llm_verify` 改为逐条事实独立评判（单次 LLM，per-fact JSON 输出）+ `_parse_cove_response` 解析；**三态 VerdictResult**：`status: "verified"|"unverified"|"failed"` 替代 `passed: bool`（`.passed` 属性保持向后兼容）；端测 status=verified，置信度 90%
 - **submit_verdict 步数预警**：在剩余 ≤1 步时向对话注入一次 user 提示，催 agent 调用 `submit_verdict` 而非触发兜底汇总；端测从"12步触发兜底"改善为"10步主动 submit_verdict"
 - **Evaluator 去 confidence**：`EvalResult` 删除 `confidence: float` 字段，LLM 只输出 `success/reason/feedback/failure_mode`；消除 LLM 自评置信度带来的虚假精度
+- **Evaluator 轨迹截断修复**：`react_loop` 所有返回点附加 `action_history`/`seen_urls`/`successful_retrievals`；Evaluator 新增 `_build_action_summary()` 将行动日志转为紧凑结构文本（工具调用逐步列出 + 已访问域名 + 成功检索率），彻底替代截断后的 trajectory 字符串；LLM Judge 现在能看到调查全程，不再受中间步骤丢失影响
+- **login-wall 黑名单校正**：移除 x.com/twitter.com（GFW 屏蔽而非登录墙，海外用户可正常访问），保留真正需要登录的 linkedin/facebook/instagram
 
 **未建成 / 规划中 ⬜**（详见 §5）
 - offercheck stage2/stage3 prompt、company_registry_search 工具、eval_suite 标注案例集
@@ -139,7 +141,7 @@
 > 推进到对应项时，把设计细节 / 决策理由回填到这里，并更新 §3 / §4。
 
 - **Verifier 校准（P6）**：✅ 已完成。stage-aware 标准 + CoVe factored 逐条评判 + 三态 VerdictResult。详见 §4。
-- **检索工具优化（P0/P1）**：✅ 已完成核心项。react_loop 跨步硬缓存（同 tool+args 直接命中缓存）；web_fetch 登录墙拦截（x.com/linkedin 等 blocklist）；web_search URL 去重；trafilatura 安装完成。未做：Corrective 再检索、轻量重排（当前优先级不高）。
+- **检索工具优化（P0/P1）**：✅ 已完成核心项。react_loop 跨步硬缓存（同 tool+args 直接命中缓存）；web_fetch 登录墙拦截（linkedin/facebook/instagram blocklist；x.com 已移出——GFW 屏蔽≠登录墙）；web_search URL 去重；trafilatura 安装完成。未做：Corrective 再检索、轻量重排（当前优先级不高）。
 - `TODO(补充)` **offercheck eval_suite**：15~20 个真实+模拟诈骗/正常案例（带 expected_verdict）+ 裁定级评分（准确率/误报率/拒答率）；接入 Eval Harness 回归门禁。
 - `TODO(补充)` **stage2/stage3 场景层**：简历定向 prompt；沟通证伪 prompt + company_registry_search。
 - `TODO(补充)` **前端四阶段 + 部署**：选岗/简历/沟通/offer 页面；Vercel + 后端部署；≥6 截图；3 分钟 demo 视频；GMI 调用证明素材。
