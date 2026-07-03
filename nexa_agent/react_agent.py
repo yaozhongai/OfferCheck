@@ -647,6 +647,10 @@ def react_loop(
             "step_utilities": step_utilities,
             "critical_step": _find_critical_step(step_utilities),
             "source_attribution": attribution,
+            # 结构化行动日志：供 Evaluator 构建紧凑摘要，替代截断的 trajectory 文本
+            "action_history": list(action_history),
+            "seen_urls": list(seen_urls),
+            "successful_retrievals": successful_retrievals,
         }
 
     def _gate_reprompt_msgs(content_or_note: str) -> None:
@@ -722,6 +726,9 @@ def react_loop(
                 "total_completion_tokens": total_completion_tokens,
                 "step_utilities": step_utilities,
                 "critical_step": _find_critical_step(step_utilities),
+                "action_history": list(action_history),
+                "seen_urls": list(seen_urls),
+                "successful_retrievals": successful_retrievals,
             }
 
         msg = choice.message
@@ -952,6 +959,9 @@ def react_loop(
                 "total_completion_tokens": total_completion_tokens,
                 "step_utilities": step_utilities,
                 "critical_step": _find_critical_step(step_utilities),
+                "action_history": list(action_history),
+                "seen_urls": list(seen_urls),
+                "successful_retrievals": successful_retrievals,
             }
         else:
             # 尝试提取完整响应作为答案
@@ -968,6 +978,9 @@ def react_loop(
                 "total_completion_tokens": total_completion_tokens,
                 "step_utilities": step_utilities,
                 "critical_step": _find_critical_step(step_utilities),
+                "action_history": list(action_history),
+                "seen_urls": list(seen_urls),
+                "successful_retrievals": successful_retrievals,
             }
 
     except Exception as exc:
@@ -983,6 +996,9 @@ def react_loop(
             "total_completion_tokens": total_completion_tokens,
             "step_utilities": step_utilities,
             "critical_step": _find_critical_step(step_utilities),
+            "action_history": list(action_history),
+            "seen_urls": list(seen_urls),
+            "successful_retrievals": successful_retrievals,
         }
 
 

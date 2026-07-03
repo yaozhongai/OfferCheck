@@ -263,6 +263,33 @@ class Evaluator:
 
     # ── 主入口 ──
 
+    @staticmethod
+    def _build_action_summary(action_log: dict) -> str:
+        """将结构化行动日志转为紧凑文本，供 Evaluator LLM 理解「到底查了什么」。
+
+        比截断的 trajectory 文本更准确：不丢失中间步骤，不依赖字符截断。
+        """
+        action_history: list = action_log.get("action_history", [])
+        seen_urls: list = action_log.get("seen_urls", [])
+        successful_retrievals: int = action_log.get("successful_retrievals", 0)
+        steps_used: int = action_log.get("steps_used", len(action_history))
+        terminated_reason: str = action_log.get("terminated_reason", "unknown")
+
+        lines = [f"工具调用日志 ({steps_used} 步, 终止: {terminated_reason}):"]
+        for i, (tool_name, tool_args) in enumerate(action_history, 1):
+            args_short = (tool_args[:80] + "...") if len(tool_args) > 80 else tool_args
+            lines.append(f"  步骤 {i}: {tool_name}({args_short})")
+
+        if seen_urls:
+            domains = sorted({
+                u.split("/")[2] if "//" in u else u
+                for u in seen_urls
+            })
+            lines.append(f"已访问域名 ({len(seen_urls)} 个 URL): {', '.join(domains[:10])}")
+
+        lines.append(f"成功检索: {successful_retrievals}/{max(len(action_history), 1)} 次工具调用")
+        return "\n".join(lines)
+
     def evaluate(
         self,
         task: str,
@@ -270,6 +297,7 @@ class Evaluator:
         trajectory: str,
         terminated_reason: str = "",
         stage: Optional[str] = None,
+        action_log: Optional[dict] = None,
     ) -> EvalResult:
         """评估 ReAct 输出质量
 
@@ -296,9 +324,9 @@ class Evaluator:
         if self.mode == "heuristic":
             return self._heuristic_evaluate(trajectory, answer, terminated_reason)
         elif self.mode == "llm":
-            return self._llm_evaluate(task, answer, trajectory, stage=stage)
+            return self._llm_evaluate(task, answer, trajectory, stage=stage, action_log=action_log)
         elif self.mode == "hybrid":
-            return self._hybrid_evaluate(task, answer, trajectory, terminated_reason, stage=stage)
+            return self._hybrid_evaluate(task, answer, trajectory, terminated_reason, stage=stage, action_log=action_log)
 
     # ── 启发式评估 ──
 
@@ -340,9 +368,10 @@ class Evaluator:
 
     def _llm_evaluate(
         self, task: str, answer: str, trajectory: str, stage: Optional[str] = None,
+        action_log: Optional[dict] = None,
     ) -> EvalResult:
         """使用 LLM 评估答案质量"""
-        prompt = self._build_llm_eval_prompt(task, answer, trajectory, stage=stage)
+        prompt = self._build_llm_eval_prompt(task, answer, trajectory, stage=stage, action_log=action_log)
 
         try:
             response = self._call_llm(prompt)
@@ -365,12 +394,17 @@ class Evaluator:
             return self._heuristic_evaluate(trajectory, answer, "")
 
     def _build_llm_eval_prompt(self, task: str, answer: str, trajectory: str,
-                               stage: Optional[str] = None) -> str:
+                               stage: Optional[str] = None,
+                               action_log: Optional[dict] = None) -> str:
         """构建 LLM 评估 prompt"""
-        # 截断轨迹（取首尾关键部分）
-        traj_summary = trajectory[:1500] if len(trajectory) <= 2000 else (
-            trajectory[:800] + "\n...(中间省略)...\n" + trajectory[-700:]
-        )
+        # 优先使用结构化行动日志（无截断、包含所有步骤）；
+        # 回退到截断 trajectory（向后兼容 / 无 action_log 时）
+        if action_log and action_log.get("action_history") is not None:
+            traj_summary = self._build_action_summary(action_log)
+        else:
+            traj_summary = trajectory[:1500] if len(trajectory) <= 2000 else (
+                trajectory[:800] + "\n...(中间省略)...\n" + trajectory[-700:]
+            )
 
         if stage and "stage4" in stage:
             criteria = """评估标准（OfferCheck Stage 4 — offer 证伪专用）：
@@ -440,6 +474,7 @@ class Evaluator:
     def _hybrid_evaluate(
         self, task: str, answer: str, trajectory: str, terminated_reason: str,
         stage: Optional[str] = None,
+        action_log: Optional[dict] = None,
     ) -> EvalResult:
         """结果优先的混合评估
 
@@ -453,7 +488,7 @@ class Evaluator:
         if self._has_substantive_answer(answer, terminated_reason):
             logger.info("Hybrid: 检测到实质性答案 (len=%d)，启动 LLM 答案质量评估 stage=%s...",
                         len(answer), stage or "generic")
-            llm = self._llm_evaluate(task, answer, trajectory, stage=stage)
+            llm = self._llm_evaluate(task, answer, trajectory, stage=stage, action_log=action_log)
 
             if llm.success:
                 # 答案通过：过程问题记为 warning 但不否决
@@ -491,7 +526,7 @@ class Evaluator:
 
             # 低严重度 → LLM 复审
             logger.info("Hybrid: 无实质答案 + 启发式低严重度 (%s)，LLM 复审...", heuristic.failure_mode)
-            llm = self._llm_evaluate(task, answer, trajectory, stage=stage)
+            llm = self._llm_evaluate(task, answer, trajectory, stage=stage, action_log=action_log)
             if llm.success:
                 return EvalResult(
                     success=True,
@@ -503,7 +538,7 @@ class Evaluator:
 
         # 启发式通过但无实质答案 → LLM 二次确认
         logger.info("Hybrid: 启发式通过，启动 LLM 二次确认...")
-        llm = self._llm_evaluate(task, answer, trajectory, stage=stage)
+        llm = self._llm_evaluate(task, answer, trajectory, stage=stage, action_log=action_log)
         if llm.success:
             return EvalResult(
                 success=True,

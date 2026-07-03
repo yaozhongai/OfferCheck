@@ -167,10 +167,12 @@ def _get_param_description(name: str, meta: dict) -> str:
 # ==========================================================================
 
 _LOGIN_WALL_DOMAINS = frozenset({
-    "x.com", "twitter.com",
+    # 真正的登录墙：不登录无法看到实质内容
     "linkedin.com",
     "facebook.com", "fb.com",
     "instagram.com",
+    # 注：x.com/twitter.com 在中国大陆因 GFW 无法访问，但海外用户可正常访问，
+    # 不列入此表；若抓取失败会由 Jina Reader 报错，agent 自行换 web_search。
 })
 
 

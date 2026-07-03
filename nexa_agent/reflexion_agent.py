@@ -312,13 +312,21 @@ class ReflexionReActAgent:
                     reflections=[],
                 )
 
-            # 阶段 3: 评估
+            # 阶段 3: 评估（传入结构化行动日志，替代截断 trajectory）
+            action_log = {
+                "action_history": react_result.get("action_history", []),
+                "seen_urls": react_result.get("seen_urls", []),
+                "successful_retrievals": react_result.get("successful_retrievals", 0),
+                "steps_used": steps_used,
+                "terminated_reason": terminated_reason,
+            }
             eval_result = self.evaluator.evaluate(
                 task=task,
                 answer=answer,
                 trajectory=trajectory,
                 terminated_reason=terminated_reason,
                 stage=stage,
+                action_log=action_log,
             )
 
             trial_info = {
