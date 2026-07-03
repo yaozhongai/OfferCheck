@@ -1,168 +1,182 @@
 # Nexa Agent
 
-> ReAct + Reflexion 自进化智能体系统 — Agent Harness Engineering 实践
+> 场景无关的自主调查 Agent 引擎（ReAct + Reflexion），OfferCheck 是它的第一个应用。
 
 ---
 
 ## 简介
 
-Nexa Agent 是一个 **ReAct + Reflexion 架构的智能体系统**：
+Nexa Agent 分三层：**核心引擎（headless）→ 场景层 → 服务与前端**。
 
-- **`app/`** — LangGraph + FastAPI 生产服务，多模态识别与问答（主系统）
-- **`react_exp/`** — ReAct + Reflexion 实验环境，验证通过后整合到 `app/`
+- **`nexa_agent/`** — 可复用核心引擎（无 FastAPI/DB/UI，可直接 import 或 CLI 运行）：ReAct 原生 tool calling + Reflexion 外循环 + Verifier 事实门控 + Evaluator + Eval Harness + 12 个工具 + 模型分层路由。
+- **`offercheck/`** — 求职机会防坑场景层（建在核心之上，通过注入 stage 任务定义区分阶段）。
+- **`server/`** — FastAPI 后端（瘦转发核心 + SSE 流式 trace + STM/LTM + Trace 持久化）。
+- **`web/`** — Next.js 前端（实时调查轨迹时间线 + 裁定卡）。
 
 ```
-react_exp/ 核心循环：
-  ReflexionReActAgent.execute()
-    ├─ Trial 1~3 (Reflexion 外循环)
-    │   ├─ Scratchpad 事实注入 + 教训注入
-    │   ├─ react_loop() — 原生 tool calling (DeepSeek V4)
-    │   │   ├─ 10 个工具: web_search / read_pdf / calculator / ...
-    │   │   ├─ 中途纠偏: URL 去重 + loop 检测
-    │   │   └─ 分档 Observation 截断 (≤15K 零截断)
-    │   ├─ Evaluator: 结果优先两阶段评估
-    │   ├─ Verifier: 事实核查网关
+调查一次的核心循环（nexa_agent）：
+  ReflexionReActAgent.execute(task, stage, on_event)
+    ├─ Trial 1~N（Reflexion 外循环）
+    │   ├─ Scratchpad 已确认事实注入 + 历史教训注入
+    │   ├─ react_loop() — 原生 tool calling
+    │   │   ├─ 12 个工具：web_search / read_pdf / calculator / domain_whois_lookup / ...
+    │   │   ├─ 中途纠偏：URL 去重 + loop 检测 + 策略切换
+    │   │   ├─ 分档 Observation 截断（≤15K 零截断）
+    │   │   └─ 动态升级：连续 2 步未发 tool_calls → 切备援模型
+    │   ├─ Evaluator：结果优先两阶段评估
+    │   ├─ Verifier：事实核查网关（触发条件满足时）
     │   └─ 失败 → 反思 + 教训提取 + Scratchpad 事实提取
-    └─ 返回最佳答案
+    └─ 返回最佳答案（on_event 全程发射结构化事件供 SSE 流式推送）
 ```
 
-### 核心能力
+---
 
-**Agent 引擎 (`react_exp/`)**
-- ReAct + Reflexion 双循环：局内 tool calling + 局外自我反思
-- 原生 Function Calling：DeepSeek V4 tool calling API，消灭正则解析失败
-- 10 个工具：web_search / wikipedia / web_fetch / tavily_extract / read_pdf / calculator / analyze_image / analyze_image_cloud / save_content / get_current_time
-- 模型分层路由：strong (Pro) 首步规划 + fast (Flash) 后续执行，节省 ~60% token
+## 核心能力
+
+**引擎（`nexa_agent/`）**
+- ReAct + Reflexion 双循环：局内 tool calling + 局外自我反思重试
+- 原生 Function Calling（OpenAI 兼容），消灭正则解析失败
+- 12 个工具：`web_search` / `wikipedia_search` / `web_fetch` / `tavily_extract` / `read_pdf` / `read_xlsx` / `calculator` / `analyze_image`（端侧 MiniCPM-V）/ `analyze_image_cloud`（云端 Gemini 3.1）/ `save_content` / `get_current_time` / `domain_whois_lookup`
+- 模型分层路由：strong（首步规划）+ fast（后续执行）+ upgrade（tool-call 备援，动态升级）
 - 中途纠偏：URL 级跨工具去重 + loop 早期检测 + 策略切换
-- Scratchpad 跨 Trial 事实传递：已确认数据点不丢失
-- Evaluator 结果优先：过程有问题不否决正确答案
+- Scratchpad 跨 Trial 事实传递 + Reflexion 教训提取
+- Verifier 事实网关：结论绑定 `[Fact]/[Source]/[Confidence]` 证据
+- 结构化 trace 发射钩子（`on_event`）：工具/信源/步骤/裁定事件流，供服务层转 SSE
 - Eval Harness：回归评测流水线 + failure mode 归因 + 运行对比
-- GAIA Benchmark Level 1：64.2% 基线
+- 可插拔搜索层：Tavily → 自建 SearXNG → Exa → DuckDuckGo 有序降级 + 熔断
 
-**生产服务 (`app/`)**
-- LangGraph 原生 ReAct Agent + FastAPI
-- 多模态：文本 + 图片（JPG / PNG / PDF）
-- STM 会话上下文 + LTM 长期记忆 + KB 分层检索
-- Trace 可视化：Events / Timeline / SSE
-- Streamlit Chat UI
+**场景层（`offercheck/`）**
+- 求职机会防坑：输入 offer/JD/公司名 → 自主联网调查 + 主动证伪 → 裁定「靠谱/存疑/大概率有坑」+ 红旗证据链 + 待确认项
+- 已就绪：stage1（选岗调研）/ stage4（offer 证伪）prompt + `domain_whois_lookup` + 裁定标签 `[Verdict]/[RedFlag]/[NeedUserConfirm]`
+- 规划中：stage2（简历定向）/ stage3（沟通证伪）/ `company_registry_search` / eval_suite
+
+**服务与前端（`server/` + `web/`）**
+- FastAPI 瘦后端：`/run_stage`（阻塞）+ `/run_stage/stream`（SSE 实时 trace）
+- STM 会话上下文 + LTM 长期记忆（增删改查 API）
+- Trace 持久化 + 查询 + SSE
+- Next.js 前端：阶段选择 + 实时调查轨迹时间线 + 裁定卡
 
 ---
 
 ## 快速开始
 
-要求：Python `3.9+`
+要求：Python `3.10+`（conda 环境推荐），Node `18+`（前端）
 
 ```bash
 git clone <repo-url> && cd Nexa_Agent
-cp .env.example .env   # 编辑填入 DEEPSEEK_API_KEY, TAVILY_API_KEY
+cp .env.example .env   # 填入 GMI_API_KEY（或 DEEPSEEK_API_KEY）、TAVILY_API_KEY
 pip install -r requirements.txt
 ```
 
-### ReAct + Reflexion Agent (`react_exp/`)
+### CLI（核心引擎，无需起服务）
 
 ```bash
-# 直接提问
-python -m react_exp.reflexion_agent "北京到上海的直线距离是多少？"
+# 通用问答
+python -m nexa_agent.reflexion_agent "北京到上海的直线距离是多少？"
 
-# 从文件读取问题
-python -m react_exp.reflexion_agent --file react_exp_jd/prompts/question_tizin.txt
+# OfferCheck 阶段（stage1=选岗调研 | stage4=offer 证伪）
+python -m nexa_agent.reflexion_agent "帮我核实这个远程 offer 是否靠谱：..." --stage stage4
 
-# 运行 Eval Harness
-python -m react_exp.eval_harness run --suite gaia_l1 --limit 5
+# 从文件读取
+python -m nexa_agent.reflexion_agent --file question.txt --stage stage4
 
-# 分析评测结果
-python -m react_exp.eval_harness analyze --input react_exp/results/eval_xxx.jsonl
-
-# 对比两次运行
-python -m react_exp.eval_harness compare --baseline run_A.jsonl --current run_B.jsonl
+# 或经 Makefile
+make agent Q="帮我证伪这个 offer..." STAGE=stage4
 ```
 
-### 生产服务 (`app/`)
+### 全栈（后端 + 前端）
 
 ```bash
-make                   # 一键启动前后端
-# 后端 → http://localhost:8000/docs
-# 前端 → http://localhost:8501
+# 后端 (:8000) — 开发期务必带 --reload，改引擎代码后自动重启（否则跑的是旧代码）
+python -m uvicorn server.main:app --port 8000 --reload
+# 或 make backend（含 llama.cpp VLM，已内置 reload）
 
-python -m app.cli -m "你好"
-python -m app.cli -i invoice.jpg -m "金额多少"
+# 前端 (:3000) — 另开终端
+cd web && npm install && npm run dev
 ```
+
+打开 http://localhost:3000 ，粘贴 offer / JD / 公司名 → 选阶段 → 实时看调查轨迹 + 裁定。
 
 ---
 
 ## 架构
 
 ```
-react_exp/                     实验环境 (验证后整合到 app/)
-├── react_agent.py             ReAct 主循环 (原生 tool calling)
-├── reflexion_agent.py         Reflexion 外循环 (Trial → Evaluate → Reflect)
-├── evaluator.py               结果优先混合评估器 (启发式 + LLM Judge)
-├── verifier.py                事实核查网关 (Verifier Agent)
-├── tools.py                   10 个工具 (web_search / read_pdf / calculator / ...)
-├── memory.py                  Reflexion 情景记忆 (教训提取 + Jaccard 去重)
-├── eval_harness.py            系统化评测流水线 (多维评分 + 回归对比)
-├── config.py                  模型分层路由 + 超参数管理
-├── logger_config.py           per-run 独立日志
-├── prompts/                   System Prompt + Reflection Prompt
-└── eval_suites/               评测套件 (回归子集 ID)
+nexa_agent/                    可复用核心引擎（headless）
+├── react_agent.py            ReAct 主循环（原生 tool calling + on_event 发射钩子）
+├── reflexion_agent.py        Reflexion 外循环（Trial → Evaluate → Verify → Reflect）
+├── evaluator.py              结果优先混合评估器（启发式 + LLM Judge）
+├── verifier.py               事实核查网关 + OfferCheck 裁定解析
+├── tools.py                  12 个工具
+├── memory.py                 Reflexion 情景记忆（教训提取 + Jaccard 去重）
+├── eval_harness.py           系统化评测流水线（多维评分 + 回归对比）
+├── config.py                 模型分层路由 + 超参数（含 GMI/DeepSeek provider）
+├── logger.py                 per-run 独立日志
+├── llm/                      LLM 客户端层（多 provider，OpenAI 兼容）
+├── trace/                    trace 事件 schema
+├── search/                   可插拔搜索 provider 层（router/providers/enrich）
+├── prompts/                  System Prompt + Reflection + OfferCheck stage1/stage4
+└── eval_suites/              评测套件（GAIA 回归子集 ID）
 
-app/                           LangGraph + FastAPI 生产服务
-├── agent/                     LangGraph ReAct Agent
-├── tools/                     工具集
-├── trace/                     Trace 事件系统
-├── storage/                   持久化层 (SQLAlchemy)
-├── llm/                       DeepSeek V4 / Kimi K2.6 / GLM-5.1
-├── pipeline/                  llama.cpp VLM (MiniCPM-V)
-├── api/                       FastAPI 路由
-└── memory/                    STM + LTM
+offercheck/                    场景层（建在核心上，当前为骨架）
+├── stages/  tools/  eval_suite/
+
+server/                        FastAPI 后端
+├── api/                       路由（run_stage / memory / trace；chat/upload 待接入）
+├── trace_store/               Trace 持久化 + SSE 推送
+├── persistence/               SQLAlchemy
+├── memory/                    STM + LTM
+├── config.py  main.py
+
+web/                           Next.js 前端
+└── app/                       page.tsx（SSE 流式 UI）+ layout + globals.css
 ```
-
-### 执行路径
-
-| 路径 | 场景 | LLM | VLM | 工具 |
-|------|------|-----|-----|------|
-| TOOL_ACT | 全部请求 (ReAct Agent) | 1-6 | 0-1 | 0-5 |
-| FALLBACK | 异常兜底 | 0 | 0 | 0 |
-> ReAct 循环最多 6 步，LLM 自行判断是否需要调工具
 
 ### API
 
-| 路由 | 说明 |
-|------|------|
-| `POST /api/v0/chat` | 多轮对话，创建 AgentState 并执行 LangGraph |
-| `POST /api/v0/upload` | 上传图片/PDF，返回 `file_id`、`file_sha256`、服务端路径 |
-| `POST /api/v0/files/analyze` | 上传后图片预识别，写入/命中 `image_analysis_cache` |
-| `GET /api/v0/trace/{id}/events` | Trace 事件明细 |
-| `GET /api/v0/trace/{id}/timeline` | 前端时间线 |
-| `GET /api/v0/trace/{id}/stream` | Trace SSE |
-| `GET/DELETE/PATCH /api/v0/memory/ltm` | LTM 记忆管理（查看/遗忘/修改） |
-| `GET /api/v0/health` | 后端、LLM、VLM 健康状态 |
+| 路由 | 说明 | 状态 |
+|------|------|------|
+| `POST /api/v0/run_stage` | 执行 OfferCheck 阶段（瘦调用核心，阻塞返回） | ✅ |
+| `POST /api/v0/run_stage/stream` | 同上，SSE 实时推送调查轨迹事件 | ✅ |
+| `GET /api/v0/health` | 后端 + 引擎模型链路健康状态 | ✅ |
+| `GET /api/v0/trace/{id}/events` | Trace 事件明细 | ✅ |
+| `GET /api/v0/trace/{id}/timeline` | 前端时间线 | ✅ |
+| `GET /api/v0/trace/{id}/stream` | Trace SSE | ✅ |
+| `GET/DELETE/PATCH /api/v0/memory/ltm` | LTM 记忆管理 | ✅ |
+| `POST /api/v0/chat` | 旧对话端点 | 501（待接入核心） |
+| `POST /api/v0/upload`、`/files/analyze` | 旧上传/预识别端点 | 501（待接入核心） |
 
 ### LLM / VLM 支持
 
-| Provider | 模型 |
-|----------|------|
-| DeepSeek V4 | deepseek-v4-flash / deepseek-v4-pro |
-| Kimi K2.6 | kimi-k2.6 |
-| GLM-5.1 | glm-5.1 |
-| VLM | llama.cpp / MiniCPM-V（OpenAI 兼容 API） |
+比赛期主推理经 **GMI Cloud Inference Engine**（OpenAI 兼容）承载；无 GMI key 时回落 DeepSeek 官方 API。
 
-### Trace
+| Provider / 模型 | 层级 |
+|------|------|
+| GMI · `deepseek-ai/DeepSeek-V4-Pro` | strong（首步规划） |
+| GMI · `deepseek-ai/DeepSeek-V4-Flash` | fast（后续执行、反思、评估） |
+| GMI · `Qwen/Qwen3.6-35B-A3B` | upgrade（tool-call 备援，动态升级） |
+| GMI · `google/gemini-3.1-flash-lite-preview` | vision（云端普通图片） |
+| GMI · `google/gemini-3.1-pro-preview` | vision（复杂/模糊图，空响应自动升级） |
+| DeepSeek 官方 API | 备用 provider（无 GMI key 时） |
+| Kimi K2.6 | 云端视觉回落（无 GMI key 时） |
+| llama.cpp / MiniCPM-V | 端侧图片分析（`analyze_image`） |
 
-每请求自动记录 `agent_trace_runs` / `agent_trace_events`，CLI / Streamlit 展示节点路径、状态、耗时和模型调用摘要。
+> **动态升级**：ReAct 循环中连续 2 步未发 `tool_calls` 时，自动从 fast 切至 upgrade 层（复杂 function schema 下的 tool-call 可靠性兜底），恢复正常后回落。
+>
+> 模型选择的唯一真源是 `nexa_agent/config.py`（`MODEL_TIER` + `MODEL_ROUTING`），可用环境变量覆盖。
 
-图片预识别与缓存复用不新增协议外 TraceEventType：
+### Eval Harness
 
-- 上传后预识别：`model_call_completed`，`payload.purpose="image_analysis_precompute"`
-- Agent 节点复用缓存：`ActionTraceItem.action="use_cached_image_analysis"`，由 `chat.py` 派生为 `node_completed`
+```bash
+# 自定义 JSONL 套件评测
+python -m nexa_agent.eval_harness run --suite path/to/cases.jsonl
 
-### Streamlit UI
+# 分析结果 / 对比两次运行
+python -m nexa_agent.eval_harness analyze --input results/eval_xxx.jsonl
+python -m nexa_agent.eval_harness compare --baseline run_A.jsonl --current run_B.jsonl
+```
 
-- 主 Chat Panel 支持真实点击上传和拖拽上传
-- 上传成功后自动触发图片预识别
-- active file 在当前会话内持续作为图片上下文
-- 用户消息中的图片缩略图会保留在历史消息里
-- 助手回答正文使用 Streamlit 原生 `st.markdown()` 渲染，支持加粗、列表、代码和段落
+> GAIA 套件（`--suite gaia_l1`）需本地放置 GAIA 数据集于 `GAIA/2023/validation/`（默认不含）。
 
 ---
 
@@ -170,10 +184,7 @@ app/                           LangGraph + FastAPI 生产服务
 
 | 文档 | 说明 |
 |------|------|
-| [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 三阶段开发规划 |
-| [TECHNICAL_ARCHITECTURE.md](docs/TECHNICAL_ARCHITECTURE.md) | 技术架构 |
-| [AgentState_SchemaV2.md](docs/AgentState_SchemaV2.md) | 状态协议 |
+| [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 开发规划 |
 | [AgentTrace_Schema.md](docs/AgentTrace_Schema.md) | Trace 协议 |
 | [Short-Term_Memory_Schema.md](docs/Short-Term_Memory_Schema.md) | 短期记忆协议 |
 | [Long-Term_Memory_Schema.md](docs/Long-Term_Memory_Schema.md) | 长期记忆协议 |
-| [SPEC.md](SPEC.md) | 项目规范与当前实现约束 |

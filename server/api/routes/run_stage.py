@@ -1,0 +1,135 @@
+"""
+OfferCheck 阶段执行接口 — server 瘦调用 nexa_agent 核心引擎
+
+Walking Skeleton（Slice 0）：把 HTTP 请求瘦转发给核心
+ReflexionReActAgent.execute()，按 stage 加载阶段任务定义 prompt，返回裁定结果。
+
+当前为非流式（阻塞执行后一次性返回），证明 server↔引擎↔前端全栈打通；
+后续 Slice（7/3 trace 发射钩子）升级为 SSE 实时推送每步调查轨迹。
+
+端点定义为同步 def，由 FastAPI 自动放入线程池执行，避免阻塞事件循环。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import queue
+import threading
+import time
+
+from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
+
+from server.api.schemas import RunStageRequest, RunStageResponse
+from nexa_agent.logger import get_logger
+
+logger = get_logger("api_run_stage")
+router = APIRouter(prefix="/api/v0", tags=["run_stage"])
+
+
+def _build_agent(request: RunStageRequest):
+    """按请求参数构造核心引擎实例（run_stage 与 stream 共用）。"""
+    from nexa_agent.reflexion_agent import ReflexionReActAgent
+    from nexa_agent.config import REFLEXION_CONFIG, REACT_CONFIG
+
+    max_trials = request.max_trials or REFLEXION_CONFIG["max_trials"]
+    max_steps = request.max_steps or REACT_CONFIG["max_steps"]
+    agent = ReflexionReActAgent(
+        max_trials=max_trials,
+        max_memory_size=REFLEXION_CONFIG["max_memory_size"],
+        evaluator_mode=REFLEXION_CONFIG["evaluator_mode"],
+        persist_memory=False,
+        max_steps=max_steps,
+    )
+    return agent
+
+
+@router.post("/run_stage", response_model=RunStageResponse,
+             summary="执行 OfferCheck 阶段（瘦调用核心引擎，非流式）")
+def run_stage(request: RunStageRequest) -> RunStageResponse:
+    """瘦转发到 nexa_agent 核心 ReflexionReActAgent.execute()（阻塞返回）。"""
+    logger.info("run_stage 请求 stage=%s input_len=%d", request.stage, len(request.input))
+
+    agent = _build_agent(request)
+    t0 = time.time()
+    result = agent.execute(
+        task=request.input,
+        image_path=request.image_path,
+        verbose=False,
+        stage=request.stage,
+    )
+    latency_ms = (time.time() - t0) * 1000
+
+    logger.info("run_stage 完成 stage=%s success=%s trials=%d latency=%.0fms",
+                request.stage, result.success, result.trials_used, latency_ms)
+
+    return RunStageResponse(
+        success=result.success,
+        stage=request.stage,
+        answer=result.answer,
+        trials_used=result.trials_used,
+        trial_details=result.trial_details,
+        reflections=result.reflections,
+        latency_ms=latency_ms,
+    )
+
+
+@router.post("/run_stage/stream", summary="执行 OfferCheck 阶段（SSE 实时 trace 流）")
+async def run_stage_stream(request: RunStageRequest) -> StreamingResponse:
+    """SSE 流式执行：引擎在后台线程跑，on_event 事件经线程安全队列实时推给前端。
+
+    事件类型（data 行 JSON 的 type 字段）：
+      trial_start / step_start / action / observation / correction /
+      verifier_start / verifier_result / trial_evaluated / final_answer /
+      done（终止，携带最终裁定）/ error（异常）
+    """
+    logger.info("run_stage/stream 请求 stage=%s input_len=%d",
+                request.stage, len(request.input))
+
+    event_q: "queue.Queue[dict]" = queue.Queue()
+    _SENTINEL = {"type": "__end__"}
+
+    def _worker():
+        agent = _build_agent(request)
+        t0 = time.time()
+        try:
+            result = agent.execute(
+                task=request.input,
+                image_path=request.image_path,
+                verbose=False,
+                stage=request.stage,
+                on_event=lambda e: event_q.put(e),
+            )
+            event_q.put({
+                "type": "done",
+                "success": result.success,
+                "answer": result.answer,
+                "trials_used": result.trials_used,
+                "reflections": result.reflections,
+                "latency_ms": round((time.time() - t0) * 1000),
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.error("run_stage/stream 引擎异常: %s", exc, exc_info=True)
+            event_q.put({"type": "error", "message": str(exc)[:500]})
+        finally:
+            event_q.put(_SENTINEL)
+
+    async def _event_stream():
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        loop = asyncio.get_event_loop()
+        # 起始事件，让前端立刻有反馈
+        yield f"data: {json.dumps({'type': 'started', 'stage': request.stage}, ensure_ascii=False)}\n\n"
+        while True:
+            # 阻塞 queue.get 放到线程池，避免堵住事件循环
+            evt = await loop.run_in_executor(None, event_q.get)
+            if evt.get("type") == "__end__":
+                break
+            yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

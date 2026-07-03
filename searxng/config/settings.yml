@@ -1,0 +1,50 @@
+# Nexa Agent — SearXNG 配置
+# 仅覆盖必要项，其余继承官方默认 (use_default_settings: true)
+# 文档: https://docs.searxng.org/admin/settings/index.html
+use_default_settings: true
+
+general:
+  instance_name: "nexa-searxng"
+  # 关闭遥测/捐赠等无关 UI
+  donation_url: false
+  contact_url: false
+
+server:
+  # 本地开发密钥；对外部署务必用 `openssl rand -hex 32` 重新生成
+  secret_key: "6cbd2e14006d70cfa7fa786ff30c3a761b3e83025e26e0596523e499fd23c96a"
+  # 私有实例：关闭限流器，避免自家 Agent 被 bot 检测拦截
+  limiter: false
+  # 允许图片代理，UI 预览更稳
+  image_proxy: true
+  bind_address: "0.0.0.0"
+  # 允许跨源，方便本地脚本/Agent 直接调用
+  method: "GET"
+
+search:
+  # 关键：开启 JSON 输出，供 Agent 以 API 方式消费
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+  # 默认语言，可被 query 参数覆盖
+  default_lang: "auto"
+
+ui:
+  static_use_hash: true
+
+# 引擎策略：禁用易被 captcha/封锁的引擎，保留对 Agent 检索稳定的源
+# 仅列出需要"关闭"的；其余引擎继承默认启用状态
+engines:
+  - name: google
+    disabled: true        # Google 对数据中心/单 IP 频繁 captcha，禁用以提升稳定性
+  - name: bing
+    disabled: false       # Bing 对 API 式检索较稳，主力
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: wikidata
+    disabled: false
