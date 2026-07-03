@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "specific-todo",
+  "prompt": "把 SPEC 里检索工具优化那个 TODO 做了，然后跑一轮 stage4 测试看看效果",
+  "assertions": [
+    {"text": "Agent locates the retrieval optimization TODO (P0/P1) in SPEC.md §5", "type": "boolean"},
+    {"text": "Agent reads the relevant source files (tools.py, search/ directory)", "type": "boolean"},
+    {"text": "Implementation plan specifies exact files and changes needed", "type": "boolean"},
+    {"text": "Plan includes running the stage4 test with the DeepSeek JD afterward", "type": "boolean"}
+  ]
+}

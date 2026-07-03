@@ -118,15 +118,23 @@ async def run_stage_stream(request: RunStageRequest) -> StreamingResponse:
     async def _event_stream():
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         # 起始事件，让前端立刻有反馈
         yield f"data: {json.dumps({'type': 'started', 'stage': request.stage}, ensure_ascii=False)}\n\n"
         while True:
-            # 阻塞 queue.get 放到线程池，避免堵住事件循环
-            evt = await loop.run_in_executor(None, event_q.get)
+            try:
+                # 带超时的 get：每 20s 若无事件则发一次 SSE keepalive 注释，
+                # 防止 Next.js dev proxy / Nginx 在长时间无数据后断开连接
+                evt = await loop.run_in_executor(None, lambda: event_q.get(timeout=20))
+            except queue.Empty:
+                yield ": keepalive\n\n"
+                continue
             if evt.get("type") == "__end__":
                 break
-            yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            try:
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            except (TypeError, ValueError) as exc:
+                logger.warning("事件序列化失败 type=%s: %s", evt.get("type"), exc)
 
     return StreamingResponse(
         _event_stream(),

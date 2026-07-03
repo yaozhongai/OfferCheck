@@ -318,6 +318,7 @@ class ReflexionReActAgent:
                 answer=answer,
                 trajectory=trajectory,
                 terminated_reason=terminated_reason,
+                stage=stage,
             )
 
             trial_info = {
@@ -343,11 +344,11 @@ class ReflexionReActAgent:
                         print(f"\n🔍 Verifier 介入: 事实核查中...")
                     _emit("verifier_start", trial=trial)
                     t_v = time.time()
-                    verdict = self.verifier.verify(answer=answer, task=task)
-                    logger.info("Verifier trial=%d passed=%s elapsed=%.1fs",
-                                trial, verdict.passed, time.time() - t_v)
+                    verdict = self.verifier.verify(answer=answer, task=task, stage=stage)
+                    logger.info("Verifier trial=%d status=%s elapsed=%.1fs",
+                                trial, verdict.status, time.time() - t_v)
                     _emit("verifier_result", trial=trial, passed=verdict.passed,
-                          reason=verdict.reason[:300])
+                          status=verdict.status, reason=verdict.reason[:300])
 
                     if not verdict.passed:
                         # Verifier 驳回 → 转化为 unreliable_source 失败

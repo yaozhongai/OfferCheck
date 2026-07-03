@@ -598,6 +598,8 @@ def react_loop(
     evidence_gate_nags = 0
     # 来源对账 registry：本次调查真实见过的 URL（观察全文，截断前收集）
     seen_urls: set[str] = set()
+    # 步数预警：OfferCheck stage 下在步数耗尽前注入一次 submit_verdict 提示
+    _near_limit_warned = False
 
     print(f"\n{'='*60}")
     print(f"🚀 ReAct Agent 启动 (tool calling 模式)")
@@ -659,6 +661,19 @@ def react_loop(
 
     while step_count < max_steps:
         step_count += 1
+
+        # 步数预警：剩余 ≤2 步时注入一次 submit_verdict 提示（仅 OfferCheck stage）
+        if stage and not _near_limit_warned and (max_steps - step_count) <= 1:
+            _near_limit_warned = True
+            logger.info("Step %d: 步数预警注入（剩余%d步）", step_count, max_steps - step_count)
+            messages.append({
+                "role": "user",
+                "content": (
+                    "⚠️ [系统] 步数即将用尽。如已收集足够证据，"
+                    "请立即调用 submit_verdict 工具提交最终裁定，不要再调用其他工具。"
+                    "只有在关键信息完全缺失时才继续搜索。"
+                ),
+            })
 
         # 动态升级：连续 N 步未发 tool_calls → 切备援模型
         if consecutive_no_toolcall >= DYNAMIC_UPGRADE_THRESHOLD:

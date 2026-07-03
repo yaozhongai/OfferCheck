@@ -271,6 +271,7 @@ class Evaluator:
         answer: str,
         trajectory: str,
         terminated_reason: str = "",
+        stage: Optional[str] = None,
     ) -> EvalResult:
         """评估 ReAct 输出质量
 
@@ -279,6 +280,7 @@ class Evaluator:
             answer: ReAct 最终答案
             trajectory: 完整推理轨迹
             terminated_reason: 终止原因 (final_answer | max_steps | llm_error | parse_error)
+            stage: 可选的场景阶段标识（如 "stage4"），用于 stage-aware 评估
 
         Returns:
             EvalResult
@@ -297,9 +299,9 @@ class Evaluator:
         if self.mode == "heuristic":
             return self._heuristic_evaluate(trajectory, answer, terminated_reason)
         elif self.mode == "llm":
-            return self._llm_evaluate(task, answer, trajectory)
+            return self._llm_evaluate(task, answer, trajectory, stage=stage)
         elif self.mode == "hybrid":
-            return self._hybrid_evaluate(task, answer, trajectory, terminated_reason)
+            return self._hybrid_evaluate(task, answer, trajectory, terminated_reason, stage=stage)
 
     # ── 启发式评估 ──
 
@@ -343,33 +345,59 @@ class Evaluator:
     # ── LLM 评估 ──
 
     def _llm_evaluate(
-        self, task: str, answer: str, trajectory: str,
+        self, task: str, answer: str, trajectory: str, stage: Optional[str] = None,
     ) -> EvalResult:
         """使用 LLM 评估答案质量"""
-        prompt = self._build_llm_eval_prompt(task, answer, trajectory)
+        prompt = self._build_llm_eval_prompt(task, answer, trajectory, stage=stage)
 
         try:
             response = self._call_llm(prompt)
             parsed = self._parse_llm_eval_response(response)
 
+            success = parsed.get("success", False)
+            reason = parsed.get("reason", "")
+            logger.info("LLM 评估结果: success=%s reason=%s failure_mode=%s",
+                        success, reason[:200], parsed.get("failure_mode"))
+
             return EvalResult(
-                success=parsed.get("success", False),
+                success=success,
                 confidence=parsed.get("confidence", 0.7),
-                reason=parsed.get("reason", ""),
+                reason=reason,
                 feedback_signal=parsed.get("feedback", ""),
-                failure_mode=parsed.get("failure_mode") if not parsed.get("success") else None,
+                failure_mode=parsed.get("failure_mode") if not success else None,
                 llm_result=parsed,
             )
         except Exception as exc:
             logger.error("LLM 评估失败: %s，回退到启发式评估", exc)
             return self._heuristic_evaluate(trajectory, answer, "")
 
-    def _build_llm_eval_prompt(self, task: str, answer: str, trajectory: str) -> str:
+    def _build_llm_eval_prompt(self, task: str, answer: str, trajectory: str,
+                               stage: Optional[str] = None) -> str:
         """构建 LLM 评估 prompt"""
         # 截断轨迹（取首尾关键部分）
         traj_summary = trajectory[:1500] if len(trajectory) <= 2000 else (
             trajectory[:800] + "\n...(中间省略)...\n" + trajectory[-700:]
         )
+
+        if stage and "stage4" in stage:
+            criteria = """评估标准（OfferCheck Stage 4 — offer 证伪专用）：
+1. 裁定是否给出三态之一：「靠谱」「存疑」「大概率有坑」？（必须有，否则失败）
+2. 裁定是否绑定了真实检索到的证据？（而非凭空判断）
+3. 是否识别并列出了 red_flags，或明确说明「无」？
+4. 是否包含 need_user_confirm（用户需自行确认的事项）？
+5. 答案是否合理——「靠谱」「存疑」「大概率有坑」都是合法的正确裁定，不能因裁定结论本身判为失败。
+   注意：「大概率有坑」在证据支持下是最严重但完全合法的裁定。
+
+以下情况才算失败：
+- 完全没有给出裁定（空答案 / 只有过程无结论）
+- 编造了从未检索过的来源（轨迹中没有对应工具调用）
+- 裁定与证据明显矛盾（如证据全部支持靠谱却裁定有坑，反之亦然）"""
+        else:
+            criteria = """评估标准：
+1. 答案是否直接回应了用户的问题核心？
+2. 答案是否有实际内容支撑（而非空泛陈述）？
+3. 答案中是否存在明显的事实性错误或自相矛盾？
+4. 答案长度是否足够（一般应超过 20 个字符）？"""
 
         return f"""你是一个严格的任务评估专家。请判断以下智能体的回答是否充分解决了用户的问题。
 
@@ -380,14 +408,11 @@ class Evaluator:
 【推理轨迹摘要】:
 {traj_summary}
 
-评估标准：
-1. 答案是否直接回应了用户的问题核心？
-2. 答案是否有实际内容支撑（而非空泛陈述）？
-3. 答案中是否存在明显的事实性错误或自相矛盾？
-4. 答案长度是否足够（一般应超过 20 个字符）？
+{criteria}
 
 请输出 JSON 格式（不要输出其他内容）：
-{{"success": true/false, "confidence": 0.0~1.0, "reason": "简要判定理由", "feedback": "如果失败，给出具体反馈；如果成功，留空", "failure_mode": "如果失败，选择: context_overflow/premature_answer/loop/tool_misuse/wrong_reasoning/null"}}"""
+{{"success": true/false, "confidence": 0.0~1.0, "reason": "简要判定理由", "feedback": "如果失败，给出具体反馈；如果成功，留空", "failure_mode": "如果失败，选择: context_overflow/premature_answer/loop/tool_misuse/wrong_reasoning/null"}}\
+"""
 
     def _parse_llm_eval_response(self, response: str) -> dict:
         """解析 LLM 评估的 JSON 响应"""
@@ -422,6 +447,7 @@ class Evaluator:
 
     def _hybrid_evaluate(
         self, task: str, answer: str, trajectory: str, terminated_reason: str,
+        stage: Optional[str] = None,
     ) -> EvalResult:
         """结果优先的混合评估
 
@@ -433,8 +459,9 @@ class Evaluator:
 
         # ── 结果优先：有实质性答案时，先评估答案质量 ──
         if self._has_substantive_answer(answer, terminated_reason):
-            logger.info("Hybrid: 检测到实质性答案 (len=%d)，启动 LLM 答案质量评估...", len(answer))
-            llm = self._llm_evaluate(task, answer, trajectory)
+            logger.info("Hybrid: 检测到实质性答案 (len=%d)，启动 LLM 答案质量评估 stage=%s...",
+                        len(answer), stage or "generic")
+            llm = self._llm_evaluate(task, answer, trajectory, stage=stage)
 
             if llm.success:
                 # 答案通过：过程问题记为 warning 但不否决
@@ -478,7 +505,7 @@ class Evaluator:
 
             # 低严重度 → LLM 复审
             logger.info("Hybrid: 无实质答案 + 启发式低严重度 (%s)，LLM 复审...", heuristic.failure_mode)
-            llm = self._llm_evaluate(task, answer, trajectory)
+            llm = self._llm_evaluate(task, answer, trajectory, stage=stage)
             if llm.success:
                 return EvalResult(
                     success=True,
@@ -491,7 +518,7 @@ class Evaluator:
 
         # 启发式通过但无实质答案 → LLM 二次确认
         logger.info("Hybrid: 启发式通过，启动 LLM 二次确认...")
-        llm = self._llm_evaluate(task, answer, trajectory)
+        llm = self._llm_evaluate(task, answer, trajectory, stage=stage)
         if llm.success:
             return EvalResult(
                 success=True,

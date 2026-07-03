@@ -40,11 +40,22 @@ logger = get_logger("verifier")
 
 @dataclass
 class VerdictResult:
-    """Verifier 裁决结果"""
-    passed: bool
+    """Verifier 裁决结果
+
+    status 三态:
+      "verified"   — 事实逐条核查通过，来源可靠
+      "unverified" — 无可核查的外部事实（纯推理/代码任务），放行但标记
+      "failed"     — 发现不可靠来源或来源与事实矛盾，驳回
+    """
+    status: str  # "verified" | "unverified" | "failed"
     reason: str
     unreliable_facts: list[dict] = field(default_factory=list)
     feedback: str = ""  # 驳回时的具体操作指引
+
+    @property
+    def passed(self) -> bool:
+        """向后兼容：status != 'failed' 均视为通过"""
+        return self.status != "failed"
 
 
 @dataclass
@@ -211,12 +222,13 @@ class VerifierAgent:
 
     # ── 主入口 ──
 
-    def verify(self, answer: str, task: str) -> VerdictResult:
+    def verify(self, answer: str, task: str, stage: Optional[str] = None) -> VerdictResult:
         """核查 Agent 输出的事实可靠性
 
         Args:
             answer: Agent 的完整 Final Answer（含数据溯源段落）
             task: 原始用户问题
+            stage: 可选的场景阶段标识（如 "stage4"），用于 stage-aware 核查标准
 
         Returns:
             VerdictResult
@@ -227,7 +239,7 @@ class VerifierAgent:
         if not facts:
             # 没有可核查的事实（纯推理/代码问题），直接放行
             return VerdictResult(
-                passed=True,
+                status="unverified",
                 reason="无外部事实数据需要核查",
             )
 
@@ -237,7 +249,7 @@ class VerifierAgent:
             return quick_reject
 
         # Step 3: LLM 深度评估（仅对需要的事实）
-        return self._llm_verify(facts, task)
+        return self._llm_verify(facts, task, stage=stage)
 
     # ── 快捷规则 ──
 
@@ -256,7 +268,8 @@ class VerifierAgent:
 
     # ── LLM 深度评估 ──
 
-    def _llm_verify(self, facts: list[dict], task: str) -> VerdictResult:
+    def _llm_verify(self, facts: list[dict], task: str,
+                    stage: Optional[str] = None) -> VerdictResult:
         """用 LLM 评估来源可信度"""
         # 构建精简的核查 prompt（只传事实，不传轨迹）
         facts_text = ""
@@ -267,31 +280,60 @@ class VerifierAgent:
                 f"    自评: {f['confidence']}\n\n"
             )
 
-        prompt = f"""你是严格的事实核查员。请判断以下 AI 在回答问题时使用的数据来源是否可靠。
+        if stage and "stage4" in stage:
+            source_criteria = """来源可信度判断标准（OfferCheck offer 证伪专用）:
+- 官方网站/官方社交媒体（LinkedIn 官方账号/Twitter 官方/微博官方）→ 可靠
+- 主流新闻媒体（搜狐、网易、36Kr、InfoQ 等转载报道）→ 基本可靠（媒体报道，非 UGC）
+- Wikipedia/权威媒体 → 基本可靠
+- LinkedIn 团队负责人/官方人员发帖 → 高可信度（一手官方信息）
+- 企业招聘平台（Boss直聘、拉勾、maimai、mokahr 等）→ 基本可靠
+- 论坛/问答网站（知乎、Reddit、Quora）/个人博客/AI聚合站 → 不可靠
+
+放行规则（满足任意一条则通过）:
+1. 核心裁定事实（公司是否存在、招聘是否真实）有 ≥2 个基本可靠以上的来源
+2. 有 ≥1 个官方一手来源支撑裁定
+3. 所有来源交叉一致且无矛盾，且核心来源可信度 Medium 及以上
+
+驳回规则（以下情况才驳回）:
+- 全部核心事实的来源都是不可靠来源（UGC/AI聚合站）
+- 发现来源与事实矛盾（如声称来自官网但实际是论坛帖子）"""
+        else:
+            source_criteria = """来源可信度判断标准:
+- 官方网站/学术期刊/政府数据 → 可靠
+- Wikipedia/权威媒体 → 基本可靠
+- 论坛/问答网站/个人博客/AI聚合站 → 不可靠
+
+如果存在多个可靠来源交叉验证同一数据，即使其中有一个不可靠来源也应通过。"""
+
+        prompt = f"""你是严格的事实核查员。请对每条事实**独立**判断其来源可靠性（CoVe factored 核查），然后给出总体结论。
 
 【用户问题】: {task[:200]}
 
 【AI 依赖的事实和来源】:
 {facts_text}
 
-请逐条判断每个来源的可信度:
-- 官方网站/学术期刊/政府数据 → 可靠
-- Wikipedia/权威媒体 → 基本可靠
-- 论坛/问答网站/个人博客/AI聚合站 → 不可靠
+{source_criteria}
 
-如果发现任何关键事实来自不可靠来源，请驳回并给出具体的重新搜索指引。
-如果存在多个可靠来源交叉验证同一数据，即使其中有一个不可靠来源也应通过。
+请逐条评判每个事实，然后给出总体结论。如果总体驳回，给出具体的重新搜索指引。
 
-输出 JSON:
-{{"passed": true/false, "reason": "...", "feedback": "如果驳回，给 Agent 的具体搜索指引（必须包含: 去哪里搜、搜什么关键词、禁止用什么来源）"}}"""
+输出 JSON（严格遵守格式，不要输出其他内容）:
+{{
+  "fact_verdicts": [
+    {{"index": 1, "reliable": true/false, "reason": "该条事实来源的评判理由"}},
+    ...
+  ],
+  "overall": "verified|unverified|failed",
+  "reason": "总体评判理由（1-2句）",
+  "feedback": "如果 overall=failed，给 Agent 的具体搜索指引（去哪里搜、用什么关键词、禁止用什么来源）；否则留空"
+}}"""
 
         try:
             response = self._call_llm(prompt)
-            result = self._parse_response(response)
+            result = self._parse_cove_response(response, facts)
             return result
         except Exception as exc:
             logger.error("Verifier LLM 调用失败: %s，默认放行", exc)
-            return VerdictResult(passed=True, reason=f"Verifier 异常，默认放行: {exc}")
+            return VerdictResult(status="unverified", reason=f"Verifier 异常，默认放行: {exc}")
 
     def _call_llm(self, prompt: str) -> str:
         from openai import OpenAI
@@ -319,20 +361,66 @@ class VerifierAgent:
         return response.choices[0].message.content or ""
 
     def _parse_response(self, text: str) -> VerdictResult:
+        """兼容旧格式 {"passed": ..., "reason": ..., "feedback": ...}"""
         json_match = re.search(r"\{[^}]+\}", text, re.DOTALL)
         if json_match:
             try:
                 data = json.loads(json_match.group(0))
                 if not data.get("passed", True):
                     return VerdictResult(
-                        passed=False,
+                        status="failed",
                         reason=data.get("reason", "来源不可靠"),
                         feedback=data.get("feedback", "请从更权威的来源重新搜索数据。"),
                     )
-                return VerdictResult(passed=True, reason=data.get("reason", ""))
+                return VerdictResult(status="verified", reason=data.get("reason", ""))
             except json.JSONDecodeError:
                 pass
-        return VerdictResult(passed=True, reason="Verifier 无法解析，默认放行")
+        return VerdictResult(status="unverified", reason="Verifier 无法解析，默认放行")
+
+    def _parse_cove_response(self, text: str, facts: list[dict]) -> VerdictResult:
+        """解析 CoVe factored 核查响应（逐条事实 + 总体结论）"""
+        # 提取最外层 JSON（可能包含嵌套的 fact_verdicts 数组）
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not json_match:
+            logger.warning("CoVe 响应无法提取 JSON，默认放行: %s", text[:200])
+            return VerdictResult(status="unverified", reason="Verifier 无法解析，默认放行")
+
+        try:
+            data = json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            logger.warning("CoVe JSON 解析失败，默认放行: %s", text[:200])
+            return VerdictResult(status="unverified", reason="Verifier 无法解析，默认放行")
+
+        overall = data.get("overall", "verified")
+        reason = data.get("reason", "")
+        feedback = data.get("feedback", "")
+
+        # 收集被判为不可靠的逐条事实
+        fact_verdicts = data.get("fact_verdicts", [])
+        unreliable_facts = []
+        for fv in fact_verdicts:
+            idx = fv.get("index", 0)
+            if not fv.get("reliable", True) and 1 <= idx <= len(facts):
+                fact = facts[idx - 1]
+                unreliable_facts.append({
+                    **fact,
+                    "reject_reason": fv.get("reason", "来源不可靠"),
+                })
+                logger.debug("CoVe 逐条驳回 [%d]: %s — %s", idx, fact.get("source", ""), fv.get("reason", ""))
+
+        if overall == "failed":
+            logger.info("CoVe 总体驳回: %s（不可靠事实数=%d）", reason[:100], len(unreliable_facts))
+            return VerdictResult(
+                status="failed",
+                reason=reason,
+                unreliable_facts=unreliable_facts,
+                feedback=feedback or "请从更权威的来源重新搜索数据。",
+            )
+
+        status = "verified" if overall == "verified" else "unverified"
+        if unreliable_facts:
+            logger.info("CoVe 总体放行（%s），但有 %d 条次要来源不可靠", status, len(unreliable_facts))
+        return VerdictResult(status=status, reason=reason, unreliable_facts=unreliable_facts)
 
     # ── 构建驳回 ──
 
@@ -359,7 +447,7 @@ class VerifierAgent:
         )
 
         return VerdictResult(
-            passed=False,
+            status="failed",
             reason=f"不可靠来源: {', '.join(bad_sources)}",
             unreliable_facts=unreliable,
             feedback=feedback,
