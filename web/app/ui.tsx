@@ -1,6 +1,15 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+
+// ─── Backend base URL ───────────────────────────────────────────────────────────
+// In production the browser talks to the FastAPI backend directly — set
+// NEXT_PUBLIC_API_BASE to the Railway URL (e.g. https://nexa-xxx.up.railway.app)
+// so long-running SSE runs bypass Vercel's 60s serverless-function limit.
+// Empty (local dev) → relative paths hit the Next.js proxy route on :3000.
+export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "").replace(/\/$/, "");
+export const apiUrl = (path: string) => `${API_BASE}${path}`;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Stage = "stage1" | "stage2" | "stage3" | "stage4";
@@ -149,8 +158,36 @@ export const STAGE_FIELDS: Record<Stage, FieldSpec[]> = {
   ],
 };
 
+// One-click demo presets — lets a judge/first-time visitor run a real
+// investigation without typing. stage1 is a grounded "happy path" (a real,
+// reputable company → low-risk verdict); stage3/4 use clearly fictitious
+// entities showing textbook overseas-job-scam red flags. Never name a real
+// company in a fraud example.
+export const DEMO_FORMS: Record<Stage, Record<string, string>> = {
+  stage1: {
+    company: "Anthropic",
+    position: "Software Engineer",
+    context: "A recruiter reached out on LinkedIn about a remote role. I want to confirm the company and role are legitimate before I reply.",
+  },
+  stage2: {
+    jd: "Senior Backend Engineer — build and scale distributed data pipelines in Python/Go. Requirements: 5+ years backend, strong SQL, experience with Kafka and Kubernetes, cloud (AWS/GCP).",
+    resume: "Backend engineer, 6 years. Python & Go. Built real-time data pipelines (Kafka, Flink) on AWS. Led migration to Kubernetes. Strong SQL / PostgreSQL.",
+    target: "Is this role a genuine fit, and are there gaps I should address?",
+  },
+  stage3: {
+    message: "Hi! We saw your profile and want to offer you a remote data-entry job, $35/hour, no interview needed. To get started, please pay a one-time $150 onboarding/equipment deposit via USDT. Reply on Telegram @hr_fastjobs to receive your contract.",
+    recruiter: "‘HR Manager’, contact only via Telegram @hr_fastjobs, no company email.",
+  },
+  stage4: {
+    offer: "Offer Letter — Meridian Pay Solutions Ltd.\nRole: Remote Financial Operations Associate\nSalary: USD 8,500 / month, paid weekly in USDT.\nHours: flexible, 100% remote, start immediately.\nSigning entity: Meridian Global Holdings (Hong Kong).\nHR contact: Telegram only. Please purchase your own $300 equipment kit from our partner; reimbursed in your first paycheck.",
+    hr: "Telegram @meridian_hr (no corporate email address provided)",
+    link: "",
+  },
+};
+
 // UI chrome strings (English-first). Investigation content language stays adaptive.
 export const UI = {
+  tryExample: "Try an example",
   tagline: "Deep-research any job offer for scams — before you trust it.",
   taglineSub: "A suspicious research co-pilot for the whole job hunt.",
   boardTitle: "Evidence Board",

@@ -9,6 +9,7 @@ import {
   parseStructuredAnswer, buildFollowupInput, buildInput, valid, summary, inputStyle,
   buildCrossStageContext, completedEarlierStages, ConvTurn,
   InlineTrace, ChatSummary, StructuredResult, StageForm,
+  apiUrl, DEMO_FORMS,
 } from "./ui";
 
 // ─── Main page ────────────────────────────────────────────────────────────────
@@ -106,7 +107,7 @@ export default function Home() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const resp = await fetch("/api/v0/upload", { method: "POST", body: fd });
+      const resp = await fetch(apiUrl("/api/v0/upload"), { method: "POST", body: fd });
       if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
       const data = await resp.json();
       setAttachedImage({ path: data.file_path, name: data.filename || file.name, preview: URL.createObjectURL(file) });
@@ -257,6 +258,11 @@ export default function Home() {
   function updateForm(k: string, v: string) {
     patchActiveCase(c => ({ ...c, forms: { ...c.forms, [k]: v } }));
   }
+  // Fill the current stage's form with a ready-made demo case (one-click try).
+  function fillDemo(s: Stage) {
+    setRawMode(false);
+    patchActiveCase(c => ({ ...c, forms: { ...c.forms, ...DEMO_FORMS[s] } }));
+  }
 
   // ─── Event reducer (pure) ─────────────────────────────────────────
 
@@ -385,7 +391,7 @@ export default function Home() {
     const setRun = isFollowup ? setLastFollowupRun : setInitialRun;
 
     try {
-      const resp = await fetch("/api/v0/run_stage/stream", {
+      const resp = await fetch(apiUrl("/api/v0/run_stage/stream"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -978,11 +984,20 @@ export default function Home() {
               )}
 
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                <button onClick={() => setRawMode(m => !m)} style={{
-                  background: "transparent", border: "none", padding: 0, cursor: "pointer",
-                  fontSize: 12, fontFamily: "var(--font-sans)", color: "oklch(50% 0.05 250)", fontWeight: 600 }}>
-                  {rawMode ? UI.useGuided : UI.skipToType}
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <button onClick={() => setRawMode(m => !m)} style={{
+                    background: "transparent", border: "none", padding: 0, cursor: "pointer",
+                    fontSize: 12, fontFamily: "var(--font-sans)", color: "oklch(50% 0.05 250)", fontWeight: 600 }}>
+                    {rawMode ? UI.useGuided : UI.skipToType}
+                  </button>
+                  {meta.engine === "live" && !isInvestigating && (
+                    <button onClick={() => fillDemo(stage)} style={{
+                      background: "transparent", border: "none", padding: 0, cursor: "pointer",
+                      fontSize: 12, fontFamily: "var(--font-sans)", color: "oklch(52% 0.02 50)", fontWeight: 600 }}>
+                      ✨ {UI.tryExample}
+                    </button>
+                  )}
+                </div>
 
                 {meta.engine === "soon" ? (
                   <span style={{ fontSize: 12, color: "oklch(52% 0.02 50)" }}>{UI.comingSoon}</span>
