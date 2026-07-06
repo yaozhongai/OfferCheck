@@ -279,7 +279,8 @@ export default function Home() {
             metaDetail: `${evt.trial}/${evt.max_trials}` }] };
 
       case "step_start":
-        return { ...prev, maxSteps: evt.max_steps ?? prev.maxSteps, trace: [...prev.trace,
+        return { ...prev, maxSteps: evt.max_steps ?? prev.maxSteps,
+          currentStep: evt.step ?? prev.currentStep, trace: [...prev.trace,
           { id: nextId(), type: "meta", metaKind: "step_start",
             metaDetail: `${evt.model ?? "unknown"} · Step ${evt.step}/${evt.max_steps}` }] };
 
@@ -784,8 +785,10 @@ export default function Home() {
             <InlineTrace
               trace={ss.initialRun.trace}
               isDone={initialDone}
-              stepCount={ss.initialRun.trace.filter(t => t.type === "step").length}
+              stepCount={ss.initialRun.currentStep ?? ss.initialRun.trace.filter(t => t.type === "step").length}
               maxSteps={ss.initialRun.maxSteps}
+              currentTrial={ss.initialRun.currentTrial}
+              maxTrials={ss.initialRun.maxTrials}
               label="Investigating"
             />
           )}
@@ -844,8 +847,10 @@ export default function Home() {
                   <InlineTrace
                     trace={f.runState.trace}
                     isDone={fDone}
-                    stepCount={f.runState.trace.filter(t => t.type === "step").length}
+                    stepCount={f.runState.currentStep ?? f.runState.trace.filter(t => t.type === "step").length}
                     maxSteps={f.runState.maxSteps}
+                    currentTrial={f.runState.currentTrial}
+                    maxTrials={f.runState.maxTrials}
                     label="Following up"
                   />
                 )}

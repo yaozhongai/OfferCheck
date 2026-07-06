@@ -75,6 +75,7 @@ export type RunState = {
   trials_used?: number;
   errorMsg?: string;
   maxSteps?: number;
+  currentStep?: number;            // per-trial step number from the latest step_start event
   currentTrial?: number;
   maxTrials?: number;
   sources?: SourceItem[];          // engine-provided structured sources (problem 5)
@@ -869,8 +870,9 @@ export function summaryParts(c: ReturnType<typeof traceCounts>): string[] {
   return p;
 }
 
-export function InlineTrace({ trace, isDone, stepCount, maxSteps, label }: {
-  trace: TraceItem[]; isDone: boolean; stepCount: number; maxSteps?: number; label?: string;
+export function InlineTrace({ trace, isDone, stepCount, maxSteps, currentTrial, maxTrials, label }: {
+  trace: TraceItem[]; isDone: boolean; stepCount: number; maxSteps?: number;
+  currentTrial?: number; maxTrials?: number; label?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const steps = trace.filter(t => t.type === "step");
@@ -888,6 +890,7 @@ export function InlineTrace({ trace, isDone, stepCount, maxSteps, label }: {
           <span>{label ?? "Investigating"}…</span>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 600,
             color: "oklch(52% 0.02 50)" }}>
+            {maxTrials && maxTrials > 1 && currentTrial ? `Trial ${currentTrial}/${maxTrials} · ` : ""}
             Step {stepCount}{maxSteps ? `/${maxSteps}` : ""}
           </span>
         </div>
