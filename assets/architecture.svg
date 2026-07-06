@@ -1,0 +1,141 @@
+<svg viewBox="0 0 720 560" xmlns="http://www.w3.org/2000/svg" role="img" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+  <title>OfferCheck Architecture</title>
+  <desc>OfferCheck — a skeptical job-offer due-diligence agent built on the Nexa engine: multimodal input feeds one ReAct + Reflexion investigation loop across four stages, gated by a grounding layer, emitting a three-state verdict with evidence.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#888"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#C15F3C"/>
+    </marker>
+    <linearGradient id="oc-brand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#CF6A44"/>
+      <stop offset="1" stop-color="#A94A2C"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ═══ Multimodal input ═══ -->
+  <rect x="196" y="10" width="328" height="34" rx="8" fill="url(#oc-brand)"/>
+  <text x="360" y="32" text-anchor="middle" font-size="11.5" font-weight="600" fill="#fff">Offer · JD · Company · Recruiter message · Screenshot</text>
+  <line x1="360" y1="44" x2="360" y2="58" stroke="var(--text-muted, #888)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <!-- ═══ Four stages — one engine, different stage prompt ═══ -->
+  <rect x="16" y="58" width="688" height="62" rx="10" fill="var(--diagram-bg, #f5f5f5)" stroke="var(--border, #e0e0e0)" stroke-width="1.2"/>
+  <text x="32" y="76" font-size="10" font-weight="700" fill="var(--text-muted, #888)" letter-spacing="0.06em">FOUR STAGES · SAME ENGINE, DIFFERENT STAGE PROMPT</text>
+  <g>
+    <rect x="28"  y="84" width="158" height="26" rx="7" fill="var(--card-bg, #fff)" stroke="#C15F3C" stroke-width="1.1"/>
+    <text x="107" y="101" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--text, #333)">① Role Research</text>
+    <rect x="196" y="84" width="158" height="26" rx="7" fill="var(--card-bg, #fff)" stroke="#C15F3C" stroke-width="1.1"/>
+    <text x="275" y="101" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--text, #333)">② Resume Fit</text>
+    <rect x="364" y="84" width="158" height="26" rx="7" fill="var(--card-bg, #fff)" stroke="#C15F3C" stroke-width="1.1"/>
+    <text x="443" y="101" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--text, #333)">③ Message Check</text>
+    <rect x="532" y="84" width="160" height="26" rx="7" fill="var(--card-bg, #fff)" stroke="#C15F3C" stroke-width="1.4"/>
+    <text x="612" y="101" text-anchor="middle" font-size="10.5" font-weight="700" fill="#A94A2C">④ Offer Verify</text>
+  </g>
+  <line x1="360" y1="120" x2="360" y2="140" stroke="var(--text-muted, #888)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <!-- ═══ Reflexion outer loop ═══ -->
+  <rect x="16" y="132" width="688" height="376" rx="12" fill="var(--diagram-bg, #f5f5f5)" stroke="var(--border, #e0e0e0)" stroke-width="1.5" stroke-dasharray="6 3"/>
+  <text x="36" y="156" font-size="11" font-weight="600" fill="var(--text-muted, #888)" letter-spacing="0.07em">NEXA ENGINE · ReAct inner + Reflexion outer loop (max 3 trials)</text>
+
+  <!-- Memory -->
+  <rect x="28" y="164" width="184" height="48" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ddd)" stroke-width="1.2"/>
+  <text x="120" y="184" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text, #333)">Memory</text>
+  <text x="120" y="199" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">Scratchpad + Reflexion lessons</text>
+  <line x1="212" y1="188" x2="248" y2="188" stroke="var(--text-muted, #888)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <!-- ReAct Engine -->
+  <rect x="250" y="164" width="220" height="48" rx="8" fill="var(--card-bg, #fff)" stroke="#C15F3C" stroke-width="1.8"/>
+  <text x="360" y="184" text-anchor="middle" font-size="12" font-weight="700" fill="#A94A2C">ReAct Engine</text>
+  <text x="360" y="200" text-anchor="middle" font-size="10" fill="var(--text-muted, #888)">Thought → Action → Observation</text>
+
+  <!-- Tools -->
+  <rect x="508" y="160" width="184" height="56" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ddd)" stroke-width="1.2"/>
+  <text x="600" y="180" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text, #333)">Tools</text>
+  <text x="600" y="195" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">web_search · web_fetch</text>
+  <text x="600" y="208" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">whois · image OCR</text>
+  <line x1="470" y1="182" x2="506" y2="182" stroke="var(--text-muted, #888)" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <line x1="506" y1="196" x2="470" y2="196" stroke="var(--text-muted, #888)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <!-- ReAct → Grounding Gate -->
+  <line x1="360" y1="212" x2="360" y2="236" stroke="var(--text-muted, #888)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <!-- Grounding Gate (the anti-hallucination differentiator) -->
+  <rect x="242" y="238" width="236" height="60" rx="8" fill="var(--gate-bg, #f7e9e2)" stroke="#C15F3C" stroke-width="1.8"/>
+  <text x="360" y="258" text-anchor="middle" font-size="11.5" font-weight="700" fill="#A94A2C">Grounding Gate</text>
+  <text x="360" y="273" text-anchor="middle" font-size="9.5" fill="var(--text, #555)">evidence gate — no evidence, no verdict</text>
+  <text x="360" y="287" text-anchor="middle" font-size="9.5" fill="var(--text, #555)">submit_verdict · source attribution (AIS)</text>
+
+  <!-- Grounding → Evaluator -->
+  <line x1="360" y1="298" x2="360" y2="320" stroke="var(--text-muted, #888)" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <!-- Evaluator -->
+  <rect x="260" y="322" width="200" height="46" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ddd)" stroke-width="1.2"/>
+  <text x="360" y="341" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text, #333)">Evaluator</text>
+  <text x="360" y="357" text-anchor="middle" font-size="10" fill="var(--text-muted, #888)">stage-aware · failure-mode tagging</text>
+
+  <!-- Fail → Reflector -->
+  <line x1="460" y1="345" x2="506" y2="345" stroke="#dc2626" stroke-width="1.2" marker-end="url(#arrow-red)"/>
+  <text x="483" y="338" text-anchor="middle" font-size="10" font-weight="600" fill="#dc2626">Fail</text>
+  <rect x="508" y="322" width="184" height="46" rx="8" fill="var(--card-bg, #fff)" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="600" y="341" text-anchor="middle" font-size="11" font-weight="600" fill="#dc2626">Reflector</text>
+  <text x="600" y="357" text-anchor="middle" font-size="10" fill="var(--text-muted, #888)">Lesson Extraction</text>
+
+  <!-- Pass → Verifier -->
+  <line x1="360" y1="368" x2="360" y2="390" stroke="#16a34a" stroke-width="1.2" marker-end="url(#arrow-green)"/>
+  <text x="374" y="383" font-size="10" font-weight="600" fill="#16a34a">Pass</text>
+
+  <!-- Verifier -->
+  <rect x="270" y="392" width="180" height="46" rx="8" fill="var(--card-bg, #fff)" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="360" y="411" text-anchor="middle" font-size="11" font-weight="600" fill="#16a34a">Verifier</text>
+  <text x="360" y="427" text-anchor="middle" font-size="10" fill="var(--text-muted, #888)">Fact Gateway · CoVe</text>
+
+  <!-- Verifier → Verdict -->
+  <line x1="360" y1="438" x2="360" y2="452" stroke="#16a34a" stroke-width="1.2" marker-end="url(#arrow-green)"/>
+
+  <!-- Verdict card (three-state output) -->
+  <rect x="210" y="454" width="300" height="46" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ccc)" stroke-width="1.2"/>
+  <rect x="222" y="462" width="74" height="20" rx="10" fill="#16a34a"/>
+  <text x="259" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Reliable</text>
+  <rect x="302" y="462" width="86" height="20" rx="10" fill="#d97706"/>
+  <text x="345" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Suspicious</text>
+  <rect x="394" y="462" width="98" height="20" rx="10" fill="#dc2626"/>
+  <text x="443" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Likely Scam</text>
+  <text x="360" y="495" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">+ evidence chain · red flags · items to confirm</text>
+
+  <!-- Model Router (infra) -->
+  <rect x="28" y="238" width="184" height="60" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ddd)" stroke-width="1.2"/>
+  <text x="120" y="258" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text, #333)">Model Router</text>
+  <text x="120" y="273" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">GMI · non-thinking instruct</text>
+  <text x="120" y="286" text-anchor="middle" font-size="8.5" fill="var(--text-muted, #888)">Qwen3-235B · DeepSeek-V3.2 · Kimi-K2</text>
+  <line x1="212" y1="268" x2="240" y2="268" stroke="var(--text-muted, #aaa)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="120" y="313" text-anchor="middle" font-size="8.5" fill="var(--text-muted, #aaa)">routes every LLM call</text>
+
+  <!-- Trace / SSE (infra) -->
+  <rect x="28" y="330" width="184" height="48" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ddd)" stroke-width="1.2"/>
+  <text x="120" y="350" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text, #333)">Trace · SSE</text>
+  <text x="120" y="365" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">every step → live UI timeline</text>
+  <line x1="258" y1="352" x2="214" y2="352" stroke="var(--text-muted, #aaa)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+
+  <!-- Reflector → Memory feedback (update lessons, retry) — routed along left margin to clear the verdict card -->
+  <line x1="600" y1="368" x2="600" y2="446" stroke="#dc2626" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <line x1="600" y1="446" x2="24" y2="446" stroke="#dc2626" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <line x1="24" y1="446" x2="24" y2="190" stroke="#dc2626" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <line x1="24" y1="190" x2="28" y2="190" stroke="#dc2626" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#arrow-red)"/>
+  <text x="34" y="432" font-size="9" fill="#dc2626">retry with lessons</text>
+
+  <!-- Legend -->
+  <line x1="40" y1="530" x2="70" y2="530" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="76" y="534" font-size="10" fill="var(--text-muted, #888)">Pass → Verdict</text>
+  <line x1="200" y1="530" x2="230" y2="530" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <text x="236" y="534" font-size="10" fill="var(--text-muted, #888)">Fail → Reflect → Retry</text>
+  <line x1="410" y1="530" x2="440" y2="530" stroke="var(--text-muted, #888)" stroke-width="1.5"/>
+  <text x="446" y="534" font-size="10" fill="var(--text-muted, #888)">Data / tool flow</text>
+</svg>

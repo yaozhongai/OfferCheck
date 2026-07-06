@@ -107,6 +107,12 @@
 - **决策**：全新 Next.js（web/），不复用旧 Streamlit；开发期 `/api/v0/*` 代理到 server 避 CORS；SSE 实时 trace 时间线 + 裁定卡。
 - **为什么**：Streamlit 是内部工具观感、Trace 耦合旧 LangGraph；重做得消费级 + 可 Vercel 部署（比赛要求 ≥6 截图页面 + 体验链接），且倒逼引擎干净暴露 trace 接口。
 
+### 3.7·补 前端信息架构矫正（2026-07-04）：三栏各归其位
+- **背景**：初版把「过程 trace」和「产物（裁定/证据/来源）」全堆右侧画布，对话区退化成「详情见右侧 →」的指针；左栏是四阶段功能菜单，视觉上把产品做成「四个独立按钮」，与 §1.2「同一引擎不同输入、非四个按钮」的叙事自相矛盾；界面中文主导，与「英文优先/出海」冲突。同类产品（Manus/MiniMax/Kimi/Perplexity/Claude/Scamio）已收敛出明确分工。调研与方案见飞书《OfferCheck 产品形态调研与界面矫正方案》(docx `IOCgdc1teolYw6xEEkWc7888nPc`) 与 [docs/产品界面改造执行计划.md](docs/产品界面改造执行计划.md)。
+- **决策**（三栏）：① **中栏对话流**承载全过程——trace 以 `InlineTrace` 折叠聚合条内联（running 实时一行 / done 汇总条可展开完整步骤），裁定摘要气泡随后；② **右栏 Evidence Board** 只放产物（裁定卡/红旗/事实/来源/待确认），空态折叠为窄条、有结论才展开；③ **功能入口下沉**为 composer 顶部 stage chips（Claude 式）+ 数据驱动精简引导字段 + 「Skip, just type」自由文本模式；左栏改为 Case/旅程导向（P1 落 Case 模型）。全界面英文优先。
+- **红线**：矫正只动 `web/` 渲染层——`reduceRun`/`runSSE`/SSE 事件 schema、`parseStructuredAnswer`/`detectVerdict` 的中文裁定关键词匹配（引擎契约）一律冻结；英文化只改 chrome，`VERDICT_STYLES` 的中文 key 保留。（注：冻结指不改既有事件语义；2026-07-05 的 `stage_routed` 是 additive 新事件、`answer_delta`/`retry` 同理，不违反本红线。）
+- **为什么**：过程归对话、产物归画布是 agentic 产品已验证的主导范式；Evidence Board 是相对 Scamio 类「只给 verdict 不给证据」竞品的差异化落点；Case 化同时承载「选岗→沟通→offer 全链路」完整度叙事与「单次证伪→求职季订阅」商业闭环。
+
 ### 3.8 Evaluator/Verifier 的 stage-aware 校准
 - **决策**：`Evaluator.evaluate()` 和 `VerifierAgent.verify()` 均加 `stage` 参数；`stage4` 时使用 OfferCheck 专用评估/核查标准，由 `reflexion_agent.execute()` 透传。
 - **为什么**：通用 LLM eval prompt 会把正确的 stage4 裁定（「靠谱/存疑/大概率有坑」+ 媒体报道来源）判为 wrong_reasoning 或 unreliable_source，导致 Trial 1 必然失败。根因是「通用事实精确性」标准与「调查类证伪产品」的证据链标准不同：offer 证伪允许媒体报道作为佐证，裁定本身的三态都是合法结论。stage-aware 分离了两套标准，不影响通用任务的严格评估。
@@ -127,24 +133,46 @@
 - **Evaluator 去 confidence**：`EvalResult` 删除 `confidence: float` 字段，LLM 只输出 `success/reason/feedback/failure_mode`；消除 LLM 自评置信度带来的虚假精度
 - **Evaluator 轨迹截断修复**：`react_loop` 所有返回点附加 `action_history`/`seen_urls`/`successful_retrievals`；Evaluator 新增 `_build_action_summary()` 将行动日志转为紧凑结构文本（工具调用逐步列出 + 已访问域名 + 成功检索率），彻底替代截断后的 trajectory 字符串；LLM Judge 现在能看到调查全程，不再受中间步骤丢失影响
 - **login-wall 黑名单校正**：移除 x.com/twitter.com（GFW 屏蔽而非登录墙，海外用户可正常访问），保留真正需要登录的 linkedin/facebook/instagram
+- **前端信息架构矫正 P0（2026-07-04，见 §3.7·补）**：`web/app/page.tsx` 三栏重排完成——① trace 内联对话流（`InlineTrace`，删除右栏 `TracePanel`）；② 右栏 Evidence Board（只放产物，空态折叠窄条、有结论展开）；③ composer stage chips + 数据驱动精简引导字段 + Skip-just-type 自由文本（`buildInput` raw 模式）；④ 全界面英文化（`UI` 文案常量，裁定英文主中文辅注）。引擎契约冻结（`reduceRun`/SSE schema/中文裁定关键词未动）；`tsc --noEmit` 通过 + 浏览器验证三栏/切 stage/raw 切换/错误路径下 board 展开均正常
+- **前端信息架构矫正 P1（2026-07-04）**：左栏 Case 化——`cases[]`+`activeCaseId` 替换 `stage/forms/stageStates`，`patchActiveCase` 稳定更新器；每 Case = 一次求职机会（含 forms + 四阶段 stageStates + 跨阶段记忆容器），侧栏显示 Case 列表 + 每 Case 四阶段进度点 + New/重命名/删除；Case 名从 stage1 company 带出（raw/空为 Untitled）；`localStorage` 持久化（水合时 running→error 清洗、配额兜底剥离 trace 明细、确定性默认 case 避免 SSR 水合不一致）；Hero 空态（fresh case 显示）。浏览器验证：多 case 创建/切换/删除、per-case 运行态还原、刷新持久化、名称派生均正常
+- **前端信息架构矫正 P2（2026-07-04）**：**T7 内联引用↔来源联动**——`ChatSummary` 加 `Cited: [n]` 引用行、Evidence Board 事实行加 `[n]` 引用标记、来源列表加编号锚点（`${anchorId}-src-${i}`）；点击引用复用 `jumpToAnchor` 滚动右栏并高亮对应来源（Perplexity 式）。**T8 组件拆分**——`page.tsx`（1781 行）按类型抽出 `app/ui.tsx`（875 行：全部类型/常量/纯helper/展示组件），`page.tsx` 瘦身至 915 行仅留 Home 容器 + Case 管理；纯移动无逻辑改动。二者均 `tsc --noEmit` 通过 + 浏览器验证（注入模拟裁定案例）引用跳转/高亮生效、拆分后零回归
+- **端到端联调 5 问修正（2026-07-05，见 [docs/端到端问题修正计划.md](docs/端到端问题修正计划.md)）**：真实后端多轮调研暴露的 5 问全部修复并端到端验证——**①** `TraceView` 自动滚动加 `!isDone` 门禁（首轮展开后折叠条不再被滚出视口）；**②** step 摘要改用 args 派生的查询词（`summarizeArgs`）而非不稳定的 thought，展开卡去掉 Thought 块（多轮一致，`anyThoughtInLabel:false`）；**③** `call_llm_with_tools` 对瞬时错误（连接/超时/5xx/429）指数退避重试 3 次、4xx 不重试 + `OpenAI(max_retries=3)` + `retry` 事件前端可见；**④** `submit_verdict` schema 加 `summary_for_user`（面向用户摘要）+ `suggested_followups`（可点击建议 chips → 发起取证式追问），研究背书（Perplexity/Google DR/ChatGPT DR 标准收尾）；**⑤** 引擎在 `final_answer` 直传结构化 `sources`（`seen_urls`+AIS 对账，`verified` 标注），前端优先消费、正则降级兜底——引用全程稳定（实测 12 条全 verified）。**附带修复**：`done{success:false}` 但有 answer 时不再误判为 "Investigation failed"——Verifier 质量 caveat ≠ 硬失败，有答案即渲染裁定（仅无 answer 才判 error）
+
+- **截图/图片上传（2026-07-05）**：前端 composer 加「📎 Attach screenshot / PDF」按钮——选图 POST `/api/v0/upload`（已有端点）拿 server path，显示缩略图 chip；`image_path` 透传进 `/run_stage/stream` 请求（`runSSE`→start/followup），引擎经 `build_user_message` 提示 + `analyze_image_cloud` 工具 OCR 图片内容再展开调查。支持纯图片提交（无文字也可发起）。端到端验证：上传伪造招聘诈骗聊天截图 → 引擎 OCR 提取「bytedance-recruit.com / 加密货币押金 / 无需面试」→ 正确裁定「大概率有坑」。补齐了 SPEC「图片/截图输入 ✅ 引擎支持 → 待实现上传界面」的前端缺口。
+- **追问回答模式 + 真流式（2026-07-05，见 §5 对话摘要第二期）**：followup 走 `answer_mode`——非裁定型追问基于上文已取证结论对话式作答（0 步、gate 放行、画布不弹卡），裁定型追问仍自动重新取证出裁定；`stream_llm_with_tools` 逐 token 流式（`_stream_answer_portion` 剔除 Thought 脚手架防泄漏、异常回退非流式）；前端打字机渲染 + 完整对话文本。端到端验证通过。
+- **stage2/stage3 场景层上线（2026-07-05）**：`offercheck_stage2.txt`（简历定向——JD×简历差距→优先级修改清单，纯文本非裁定；`_answer_requires_evidence` 豁免 stage2，不强制取证）+ `offercheck_stage3.txt`（沟通证伪——核实招聘方身份/异常沟通，`submit_verdict` 复用三态 靠谱/存疑/大概率有坑；Evaluator/Verifier 的 stage4 宽松分支扩展到 stage3）。前端 `STAGE_META` stage2/stage3 `engine: soon→live`。四阶段全部可跑。端测：stage2 零检索出结构化清单、gate 不误拦；stage3 联网核查招聘方身份出裁定。**附带**：`_build_structured_sources` 过滤 localhost/127.0.0.1 噪声来源
+
+- **offercheck eval_suite 全四阶段评测（2026-07-05）**：`offercheck/eval_suite/cases.jsonl` 标注 **26 例**，按阶段分两套评分——**裁定级（stage1×5 / stage3×4 / stage4×12，共 21 例）**：`expected_verdict` ∈ reliable/suspicious/likely_scam；stage4/3 用 靠谱/存疑/大概率有坑，stage1 选岗用 推荐/谨慎/不推荐（分类器映射到同一枚举，「不推荐」靠有序匹配先于「推荐」命中）；覆盖冒名真公司/仿冒域名/预付款/无面录用/超额支票/礼品卡/僵尸岗/不可核实公司等模式。**关键词召回（stage2×5）**：简历定向是非裁定自由文本清单，用 `expected_keywords` 预置「JD 要求而简历缺失、正确定向分析必须指出的差距关键词」，按命中召回率评分。**接入 Eval Harness**：`EvalCase` 加 `expected_verdict`/`stage`/`expected_keywords`（透传 stage 加载阶段 prompt，每条恰带其一，harness 据此选评分模式）；裁定级 `classify_prediction_verdict`+`compute_verdict_metrics`（**准确率 / 误报率(把靠谱判成有坑) / 漏报率(把诈骗判成靠谱) / 拒答率 + 混淆矩阵**）；关键词 `score_keyword_recall`+`compute_keyword_metrics`（**平均召回率 + 达标率**，recall≥0.6 判 correct）；`run --suite offercheck` 一键跑，`analyze`/`compare` 均已扩展显示两套指标（compare 2pp 门禁即回归 gate）。**附带发现并规避**：`_classify_verdict_level` 对整行 [Verdict] 做子串匹配，会被 reason 里否定语境的 scam 关键词（「未发现…诈骗案例」）误伤把「靠谱」判成 likely_scam——评分器改为只信任裁定 label 本身（分隔符前那截）规避（同名产品 bug 待单独修，见 §5）。端到端 smoke：stage4（scam+ok）2/2、stage2 关键词召回 100%、stage1 裁定路径打通（借此暴露引擎对「不可核实公司」偏严判成 likely_scam 而非 suspicious，与 §3.3「无法核实→存疑」doctrine 不符，属真实校准信号）。
+
+- **跨阶段记忆真接线 + followup 多能力路由（2026-07-05）**：回应主办方「智能/自动化 + 全链路持续辅助」维度。**(P0 跨阶段携带)** `buildCrossStageContext`（web/app/ui.tsx）把同 Case 内已完成早前阶段的最新结论（裁定/关键事实/红旗/来源；stage2 为清单摘录）打包成紧凑 JSON 块，`startInitial` 注入 `[本案早前阶段的已取证结论…]` + `[本阶段任务]`——stage4 证伪自动带着 stage1 调研上下文跑。**修正一处 UI 假宣传**：原 stage4 banner 宣称 "findings are carried automatically" 但代码从未注入；banner 已改为仅在真有携带时展示并列出携带阶段。接地不弱化：携带块明示「新裁定仍须独立取证核实」，evidence gate / Verifier 照常。**(P1 followup stage 路由)** 单一对话内多能力组合——`nexa_agent/stage_router.py` 两级路由：关键词门（无跨阶段信号词→零成本 keep，覆盖绝大多数普通追问）+ fast 层 LLM 单次确认（防「offer」这类高频词误伤；失败/超时安全回落 keep）；`RunStageRequest.auto_route`（前端 followup 默认开）；路由发生时发 `stage_routed` 事件（additive，不破坏既有 SSE 契约）并以路由后 stage prompt 执行，`done` 事件回传 effective stage；前端 routed badge + trace 注记。端测：stage4 追问「简历和 JD 差距」→ 路由 stage2 并以 stage2 清单格式作答（19.5s）；「offer 竞业条款正常吗」同阶段词不触发（零成本 keep）；浏览器验证 banner 展示 + 请求体真实携带 stage1 裁定/事实/来源。
+
+- **英文 eval 用例 + PDF 附件修复 + Profile 决策（2026-07-05）**：**(1) 英文用例**：eval_suite 26→32——6 条全英文（tag `english`：scam×2 礼品卡/WhatsApp-USDT、suspicious×1 查无此司、reliable×2 GitLab/Cloudflare、stage2 关键词×1 Rust/Kafka/observability）；en_scam_01 live 验证裁定 likely_scam 正确——英文输入端到端 + 裁定 label 分类器双语兼容，出海维度硬证据。**(2) PDF 附件死路修复**：`build_user_message` 此前对一切附件都说「上传了一张图片…用 analyze_image」，而 `analyze_image_cloud` 拒绝非图片扩展名——前端「Attach screenshot / PDF」的 PDF 路径实际是坏的；改为按扩展名指路（.pdf → `read_pdf`，图片 → VLM OCR），并补装 `pymupdf4llm`（requirements 有但 agent env 未装）。live 验证：PDF 简历 → read_pdf 提取 → stage2 输出基于 PDF 真实内容的差距清单（正确识别 RabbitMQ≠Kafka、缺 Rust 等）；**顺带验证接地层**：修复前 read_pdf 失败时 agent 诚实报告「PDF 解析失败」并拒绝编造简历内容。**(3) 简历解析决策**：不做结构化简历解析器（ATS 式实体抽取）——LLM 直接对 raw text 做 JD 对比已足够，结构化解析是过早工程化且市场实测幻觉重灾区；PDF 上传→read_pdf→分析 这条已通的路就是「简历解析」的正确形态。**(4) Profile 机制决策**：比赛期不做——Case 级轻 Profile 已事实存在（`forms` 为 Case 级，resume 在 stage1/2 间自动复用），单用户 demo 下跨 Case 复用无可见收益；三件真缺口（全局 Profile / LTM 挂接 / 画像驱动红旗校准）列为赛后代办（飞书文档专节 + §5）。
+
+- **followup 记忆管理修复：对话窗口 + 路由粘滞 + 材料注入（2026-07-05）**：真实使用暴露多轮连续性断裂——stage1 里追问「按简历和岗位比对」被路由 stage2 并要求提供 JD，用户回「如图」+JD 截图后引擎却**再次输出岗位靠谱裁定**，未做比对。**三重根因**：① `buildFollowupInput` 一步马尔可夫 + 有损解析——只带上一条 answer 的 `parseStructuredAnswer` 结构化字段，对话式回复（无 [Verdict]/[Fact]）解析后≈空，「请提供 JD 和简历」的关键上下文整体丢失；② 路由不粘滞——`runFollowup` 恒发面板 stage，「如图」无关键词过不了路由门→回落 stage1 prompt→重做岗位验证；③ 用户材料（forms.resume）不进 followup 上下文。**修复**：① 滚动对话窗口——最近 3 轮 user/assistant 转写（裁定型回复→紧凑结构化，**对话式回复→原文摘录**以保住「要材料」类指令），引用连续性取最近裁定轮 sources；context 标记改 `[对话上下文 - 供参考]`（`[追问/补充信息]` 标记不动，stage_router 契约不破）；② 路由粘滞——下一轮默认继承上一轮 `routedStage`（请求带 requestStage、UI 状态仍挂面板 stage；新 followup 预置 routedStage 保证链式继承 + badge 显示；引擎路由器仍可显式切走）；③ `forms.resume/jd` 作为 `user_materials` 注入（各截 1500 字）。**验证**：引擎侧模拟三轮对话 payload（sticky stage2）→ 输出【匹配概览】简历比对清单、引用简历中的 LangChain/RAG 原型、不再重复裁定；UI 侧预览种入 bug 现场 + fetch 拦截 → 实发 stage=stage2、历史含双轮（裁定轮 + 要材料轮）、user_materials 含简历、包体 854 字符紧凑。
+
+- **检索工具优化（P0/P1 核心项，2026-07-03）**：react_loop 跨步硬缓存（同 tool+args 直接命中缓存）；web_fetch 登录墙拦截（linkedin/facebook/instagram blocklist）；web_search URL 去重；trafilatura 安装。未做残留见 §5。
+- **对话摘要第二期全量（2026-07-05）**：`submit_verdict` 加 `summary_for_user`/`suggested_followups`；追问回答模式 `answer_mode`（非裁定追问 0 步对话式作答、gate 放行）；`stream_llm_with_tools` 逐 token 真流式（`_stream_answer_portion` 剔除 Thought 防泄漏，异常回退非流式）；前端打字机渲染。端测全通过。
 
 **未建成 / 规划中 ⬜**（详见 §5）
-- offercheck stage2/stage3 prompt、company_registry_search 工具、eval_suite 标注案例集
-- Verifier CoVe 化 + 评估器校准
-- 检索缓存/去重/溯源 registry 优化
-- 前端四阶段完整页面 + 部署（Vercel）+ GMI 调用证明 + demo 视频
+- offercheck company_registry_search 工具（需外部工商 API）
+- 前端部署（Vercel）+ GMI 调用证明 + demo 视频（需本人操作）
+- eval_suite **全量跑分**（32 例 live，需 GMI 额度 + 时长，本人触发）
+- 记忆管理 L1–L4 + 调查 playbook 层（赛后，方向已定，见 §5）
 
 ---
 
 ## 5. 待后续推进时补充（TODO）
 
-> 推进到对应项时，把设计细节 / 决策理由回填到这里，并更新 §3 / §4。
+> 推进到对应项时，把设计细节 / 决策理由回填到这里，并更新 §3 / §4。**已完成项统一移至 §4**（Verifier 校准 / 检索优化核心项 / eval_suite / stage2/3 / 对话摘要第二期 / 四阶段前端页面均已迁移）。
 
-- **Verifier 校准（P6）**：✅ 已完成。stage-aware 标准 + CoVe factored 逐条评判 + 三态 VerdictResult。详见 §4。
-- **检索工具优化（P0/P1）**：✅ 已完成核心项。react_loop 跨步硬缓存（同 tool+args 直接命中缓存）；web_fetch 登录墙拦截（linkedin/facebook/instagram blocklist；x.com 已移出——GFW 屏蔽≠登录墙）；web_search URL 去重；trafilatura 安装完成。未做：Corrective 再检索、轻量重排（当前优先级不高）。
-- `TODO(补充)` **offercheck eval_suite**：15~20 个真实+模拟诈骗/正常案例（带 expected_verdict）+ 裁定级评分（准确率/误报率/拒答率）；接入 Eval Harness 回归门禁。
-- `TODO(补充)` **stage2/stage3 场景层**：简历定向 prompt；沟通证伪 prompt + company_registry_search。
-- `TODO(补充)` **前端四阶段 + 部署**：选岗/简历/沟通/offer 页面；Vercel + 后端部署；≥6 截图；3 分钟 demo 视频；GMI 调用证明素材。
+- `TODO(修复)` **`_classify_verdict_level` 否定语境误伤**：verifier.py 的裁定分类器对整行 [Verdict] 做子串匹配，reason 里出现「未发现…诈骗案例」会把「靠谱」误判为 likely_scam（导致 server 裁定卡给合法 offer 渲染成诈骗）。eval 评分器已用「只取 label 片段」规避，产品侧（server/前端裁定卡）仍受影响，应把分类改为优先取裁定 label（分隔符前那截）。
+- `TODO(补充)` **部署与提交素材（7/6，本人操作）**：Vercel + 后端部署（⚠️ SSE 经代理的 buffering 断流风险，部署后第一件事跑一条完整调查流）；≥6 截图；3 分钟 demo 视频（persona 叙事）；GMI 调用证明 ≥2 张；32 例 eval live 跑分数字进提交文档。
+- `TODO(补充)` **eval_suite 残留**：真实脱敏案例替换部分模拟案例；stage2 关键词召回可加 LLM-judge「建议采纳率」维度（当前用关键词召回作可判定代理）。
+- `TODO(补充)` **检索优化残留**：Corrective 再检索、轻量重排（优先级不高）。
+- `TODO(补充)` **company_registry_search**：需外部工商 API；stage3/4 当前用 web_search + whois 兜底（符合「不依赖陌生领域 KB」边界，不阻塞）。
+- **用户画像 Profile 层（产品内）**：⏸ 决策不做（2026-07-05，见 §4）——比赛期性价比低（Case 级轻 Profile 已存在：`forms.resume` 在 stage1/2 间复用；单用户 demo 看不到跨 Case 收益）。赛后三件套代办已列飞书文档专节：全局 Profile（约半天）/ LTM 挂接（约半天）/ 画像驱动红旗校准（约 1 天，含薪资-市场基准信号）。
+- **记忆管理优化方向（2026-07-05 评审，全部赛后）**：现状四层——①Trial 内 messages + Observation 分档截断（健康）②Trial 间 Scratchpad + Reflexion 教训池（健康）③轮次间前端 3 轮滚动对话窗口 + 路由粘滞 + user_materials（刚修复，天花板低）④跨阶段结构化携带 + LTM 零使用（最薄）。**结构性上限**：轮次/跨阶段记忆全靠前端打包塞单条 user prompt（server 每请求新建 agent 无状态）——好处是部署简单，代价是第 4 轮遗忘、事实不累积。**优先级**：**L1 Case 事实账本**（每 run 的事实/红旗/来源按实体键控合并进 Case 级账本，去重+来源累积+冲突标记，后续轮次注入累积账本而非最近 N 轮——Scratchpad 思想上移产品层，≈1–2 天，第一个做）→ **playbook 层**（见下条）→ **L2 对话压缩**（窗口外旧轮 fast 摘要 running summary，有 L1 后优先级降，≈半天）→ **L4 LTM 激活**（诈骗域名黑名单/已核实公司缓存/Profile，绑商业化推进）→ **L3 server 端真会话**（case_id + messages 数组续写，engine `execute` 接受 history，≈2–3 天，L1 落地后再评估必要性）。**L5 向量检索继续不做**（§2.10 触发条件未到）。
+- **Skills / 调查 playbook 决策（2026-07-05）**：**完整 skills 基建不做**（SKILL.md 规范/目录发现/渐进式加载是开放任务域 agent 的上下文摊薄手段；四阶段封闭域用不上，违反 §1.1 统御原则）。**轻量调查 playbook 层值得做（赛后 1–2 天）**：stage prompt 本就是原始 skill 机制（stage router 即 dispatcher）——把高频诈骗模式的调查手册写成独立 prompt 片段（`playbooks/impersonation`：whois 注册时间+官方域名比对+MX 记录；`advance-fee`：礼品卡/押金取证要点；`ghost-job`：僵尸岗信号），调查中检测到模式信号时动态注入（复用 stage router 两级门：关键词→fast 确认）。与 L1 配套（账本存事实、playbook 存方法）；**Reflexion 教训池反复出现的教训可蒸馏固化为 playbook**（episodic→procedural memory distillation）——dynamic context loading 是 DeepSeek Harness 叙事强点。
 - `TODO(补充)` **few-shot 正例**：纵深防御中间层（原生 tool-calling 下的正确「先查证再裁定」示范）。
 - `TODO(补充)` **DeepSeek 面试补口径**：7/6 提交后另花 1–2 天加 read_file/edit_file/run_shell + 「读 repo→改 bug→跑 pytest→Reflexion 重试」coding demo（只为补「代码味道」，不进比赛）。
 
