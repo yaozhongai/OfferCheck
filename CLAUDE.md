@@ -45,7 +45,7 @@ Three layers in one repo — dependency direction is **server/offercheck → nex
 
 - **`nexa_agent/`** — the engine. Headless, importable, no FastAPI/DB/UI. `react_agent.py` (ReAct inner loop, native function calling) → `reflexion_agent.py` (`ReflexionReActAgent.execute()`, the Trial→Evaluate→Verify→Reflect outer loop) → `evaluator.py` / `verifier.py` / `memory.py` (Reflexion episodic) / `tools.py` (12 tools) / `eval_harness.py` / `search/` (pluggable providers) / `llm/` (multi-provider client) / `trace/` (event schema) / `config.py` / `logger.py`.
 - **`offercheck/`** — scenario layer (currently skeleton). Stages are **not** separate code paths: the same engine gets a different `--stage` prompt (`nexa_agent/prompts/offercheck_stage{1,4}.txt`) appended after the generic `react_system.txt`.
-- **`server/`** — thin FastAPI. `/api/v0/run_stage` and `/run_stage/stream` (SSE) forward to `ReflexionReActAgent.execute()`. `chat`/`upload` endpoints return 501 (legacy, pre-refactor). `server/memory/` = STM/LTM product memory; `server/trace_store/` = persistence + SSE; `server/persistence/` = SQLAlchemy.
+- **`server/`** — thin FastAPI. `/api/v0/run_stage` and `/run_stage/stream` (SSE) forward to `ReflexionReActAgent.execute()`; `upload` + `memory` + `trace` are live. (The legacy `/chat` route was removed — superseded by `run_stage`; `/files/analyze` still 501, engine OCRs inline via `analyze_image_cloud`.) `server/memory/` = STM/LTM product memory; `server/trace_store/` = persistence + SSE; `server/persistence/` = SQLAlchemy.
 - **`web/`** — Next.js App Router; `page.tsx` streams the SSE trace and renders a verdict card.
 
 ### Model routing (single source of truth)

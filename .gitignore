@@ -68,6 +68,15 @@ uploads/
 
 # ── Claude Code ──
 .claude/
+CLAUDE.md
+
+# ── 内部/开发产物：不进公开仓库 ──
+# 设计深潜/会议纪要/规划稿等内部文档
+docs/
+# 测试与用例（内部；含 API smoke test）
+tests/
+# dev-loop 自定义 skill 与工作区
+skills/
 
 # ── 脚本 / 运维文件 ──
 scripts/
