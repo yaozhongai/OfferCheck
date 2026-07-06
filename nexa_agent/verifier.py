@@ -170,18 +170,30 @@ class OfferVerdict:
 
 
 def _classify_verdict_level(verdict_text: str) -> str:
-    """把裁定原文归一化为可枚举的等级，供前端着色/图标"""
-    t = verdict_text.lower()
+    """把裁定原文归一化为可枚举的等级，供前端着色/图标
+
+    只信任裁定 label（首个分隔符之前那截）：理由部分常含否定语境关键词
+    （如「未发现…诈骗案例」），整行子串匹配会把「靠谱」误判成 likely_scam。
+    label 判不出等级时才回退整行匹配兜底。
+    """
+    label = re.split(r"——|—|：|:|\s-\s", verdict_text.strip(), maxsplit=1)[0]
+    level = _match_verdict_keywords(label)
+    return level if level != "unknown" else _match_verdict_keywords(verdict_text)
+
+
+def _match_verdict_keywords(text: str) -> str:
+    """有序关键词匹配（scam → suspicious → reliable）"""
+    t = text.lower()
     # 大概率有坑 / scam
-    if any(k in verdict_text for k in ("大概率有坑", "有坑", "诈骗", "骗局", "不推荐")) or \
+    if any(k in text for k in ("大概率有坑", "有坑", "诈骗", "骗局", "不推荐")) or \
        any(k in t for k in ("scam", "fraud", "likely scam", "high risk")):
         return "likely_scam"
     # 存疑 / suspicious / 谨慎
-    if any(k in verdict_text for k in ("存疑", "谨慎", "可疑")) or \
+    if any(k in text for k in ("存疑", "谨慎", "可疑")) or \
        any(k in t for k in ("suspicious", "caution", "uncertain")):
         return "suspicious"
     # 靠谱 / reliable / 推荐
-    if any(k in verdict_text for k in ("靠谱", "可靠", "推荐")) or \
+    if any(k in text for k in ("靠谱", "可靠", "推荐")) or \
        any(k in t for k in ("reliable", "legit", "trustworthy", "safe")):
         return "reliable"
     return "unknown"

@@ -217,8 +217,9 @@ SEARCH_CONFIG = {
     "max_results": int(os.environ.get("SEARCH_MAX_RESULTS", "5")),
     "snippet_max_chars": int(os.environ.get("SEARCH_SNIPPET_MAX_CHARS", "300")),
     "request_timeout": int(os.environ.get("SEARCH_TIMEOUT", "15")),
-    # 自建 SearXNG 后端（见 searxng/ 目录）
-    "searxng_base_url": os.environ.get("SEARXNG_BASE_URL", "http://localhost:8888"),
+    # 自建 SearXNG 后端（见 searxng/ 目录）——opt-in：未显式设置 SEARXNG_BASE_URL 时禁用，
+    # 避免未部署 SearXNG 的环境（如线上容器）反复连 localhost 失败、白白占用降级槽位
+    "searxng_base_url": os.environ.get("SEARXNG_BASE_URL", ""),
     # Exa（可选，1000/月免费，免信用卡）
     "exa_api_key": os.environ.get("EXA_API_KEY", ""),
     # 健康熔断：单 provider 连续失败 N 次后，冷却一段时间内跳过
