@@ -67,6 +67,13 @@ class EvalCase:
     tags: list[str] = field(default_factory=list)
     file_path: Optional[str] = None
     image_path: Optional[str] = None
+    # OfferCheck 裁定级评测：expected_verdict ∈ reliable | suspicious | likely_scam
+    # 设置后按裁定归一化匹配（而非 GAIA 子串匹配），并透传 stage 加载阶段 prompt
+    expected_verdict: Optional[str] = None
+    stage: Optional[str] = None
+    # 关键词召回评测（stage2 简历定向等非裁定型）：预置「必须被指出的差距关键词」，
+    # 按 Agent 输出是否命中这些关键词打召回分（详见 score_keyword_recall）
+    expected_keywords: Optional[list[str]] = None
 
 
 @dataclass
@@ -86,6 +93,12 @@ class EvalRecord:
     tags: list[str] = field(default_factory=list)
     agent_success: bool = False
     timestamp: str = ""
+    # 裁定级评测：期望/预测裁定归一化等级（None = 非 OfferCheck 用例）
+    expected_verdict: Optional[str] = None
+    predicted_verdict: Optional[str] = None
+    # 关键词召回评测（stage2）：期望关键词 + 实测召回率（0~1）
+    expected_keywords: Optional[list[str]] = None
+    keyword_recall: Optional[float] = None
 
 
 @dataclass
@@ -103,6 +116,10 @@ class EvalReport:
     failure_mode_dist: dict[str, int] = field(default_factory=dict)
     per_tag_accuracy: dict[str, float] = field(default_factory=dict)
     config_snapshot: dict = field(default_factory=dict)
+    # 裁定级指标（仅当套件含 expected_verdict 用例时填充）
+    verdict_metrics: dict = field(default_factory=dict)
+    # 关键词召回指标（仅当套件含 expected_keywords 用例时填充）
+    keyword_metrics: dict = field(default_factory=dict)
     records: list[EvalRecord] = field(default_factory=list)
 
 
@@ -140,6 +157,150 @@ def match_answer(prediction: str, reference: str) -> bool:
         except ValueError:
             pass
     return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OfferCheck 裁定级评分
+# ═══════════════════════════════════════════════════════════════════════════
+
+VERDICT_LEVELS = ("reliable", "suspicious", "likely_scam")
+
+
+def classify_prediction_verdict(prediction: str) -> str:
+    """把 Agent 输出归一化为裁定等级
+
+    Returns:
+        reliable | suspicious | likely_scam | unknown（拒答/无裁定）
+
+    注意：`_classify_verdict_level` 对整行 [Verdict] 文本做子串匹配，会被
+    「未发现…诈骗案例」这类**否定语境**里的 scam 关键词误伤（把「靠谱」判成
+    likely_scam）。评分只信任裁定**标签本身**——即 [Verdict] 行分隔符
+    （——/—/-/:）之前的那截 label，对它做有序关键词匹配；仅当没有 [Verdict]
+    标签（自由文本回答）时才回退到全文兜底分类。
+    """
+    if not prediction or not prediction.strip():
+        return "unknown"
+
+    verdict_match = re.search(r"\[Verdict\]\s*(.*?)(?:\n|$)", prediction, re.IGNORECASE)
+    if verdict_match:
+        label = re.split(r"——|—|:|：|\s-\s", verdict_match.group(1).strip(), maxsplit=1)[0]
+        level = _classify_verdict_label(label)
+        if level != "unknown":
+            return level
+        # label 本身无法判定时，退回到整条 verdict 行
+        return _classify_verdict_label(verdict_match.group(1))
+
+    # 无 [Verdict] 标签 → 自由文本兜底
+    from nexa_agent.verifier import _classify_verdict_level
+    return _classify_verdict_level(prediction)
+
+
+def _classify_verdict_label(label: str) -> str:
+    """对裁定 label 片段做有序关键词匹配（scam → suspicious → reliable）"""
+    t = label.lower()
+    if any(k in label for k in ("大概率有坑", "有坑", "诈骗", "骗局", "不推荐")) or \
+       any(k in t for k in ("scam", "fraud", "high risk")):
+        return "likely_scam"
+    if any(k in label for k in ("存疑", "谨慎", "可疑")) or \
+       any(k in t for k in ("suspicious", "caution", "uncertain")):
+        return "suspicious"
+    if any(k in label for k in ("靠谱", "可靠", "推荐")) or \
+       any(k in t for k in ("reliable", "legit", "trustworthy", "safe")):
+        return "reliable"
+    return "unknown"
+
+
+def compute_verdict_metrics(records: list["EvalRecord"]) -> dict:
+    """裁定级评测指标：准确率 / 误报率 / 漏报率 / 拒答率 + 混淆矩阵
+
+    - accuracy:            裁定等级精确匹配率
+    - false_positive_rate: 误报——把「靠谱(reliable)」判成 suspicious/likely_scam 的比例
+                           （吓退好机会，产品体验杀手）
+    - miss_rate:           漏报——把「大概率有坑(likely_scam)」判成 reliable 的比例
+                           （最危险，用户可能因此受骗）
+    - refusal_rate:        拒答——预测为 unknown（无裁定）的比例
+    """
+    verdict_records = [r for r in records if r.expected_verdict]
+    n = len(verdict_records)
+    if n == 0:
+        return {}
+
+    correct = sum(
+        1 for r in verdict_records if r.predicted_verdict == r.expected_verdict
+    )
+
+    reliable_cases = [r for r in verdict_records if r.expected_verdict == "reliable"]
+    scam_cases = [r for r in verdict_records if r.expected_verdict == "likely_scam"]
+
+    false_positives = sum(
+        1 for r in reliable_cases
+        if r.predicted_verdict in ("suspicious", "likely_scam")
+    )
+    misses = sum(1 for r in scam_cases if r.predicted_verdict == "reliable")
+    refusals = sum(1 for r in verdict_records if r.predicted_verdict == "unknown")
+
+    # 混淆矩阵：expected -> {predicted: count}
+    confusion: dict[str, dict[str, int]] = {}
+    for r in verdict_records:
+        row = confusion.setdefault(r.expected_verdict, {})
+        row[r.predicted_verdict or "unknown"] = row.get(r.predicted_verdict or "unknown", 0) + 1
+
+    return {
+        "total": n,
+        "correct": correct,
+        "accuracy": round(correct / n * 100, 1),
+        "false_positive_rate": round(false_positives / len(reliable_cases) * 100, 1)
+        if reliable_cases else 0.0,
+        "false_positive_n": f"{false_positives}/{len(reliable_cases)}",
+        "miss_rate": round(misses / len(scam_cases) * 100, 1) if scam_cases else 0.0,
+        "miss_n": f"{misses}/{len(scam_cases)}",
+        "refusal_rate": round(refusals / n * 100, 1),
+        "refusal_n": f"{refusals}/{n}",
+        "confusion": confusion,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 关键词召回评分（stage2 简历定向等非裁定型）
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 召回 ≥ 该阈值即判该用例 correct（驱动 accuracy 与回归门禁）
+KEYWORD_RECALL_THRESHOLD = 0.6
+
+
+def score_keyword_recall(prediction: str, expected_keywords: list[str]) -> tuple[float, list[str]]:
+    """关键词召回：Agent 输出是否指出了我们预置的「必须命中的差距关键词」
+
+    stage2 的产物是自由文本修改清单，没有可枚举裁定；改用**可判定的代理指标**——
+    用例构造时让 JD 要求而简历缺失若干**独特关键词**，正确的定向分析应把这些差距点
+    显式指出。逐个关键词做大小写无关的子串匹配，返回 (召回率, 未命中列表)。
+
+    Returns:
+        (recall ∈ [0,1], missed_keywords)
+    """
+    if not expected_keywords:
+        return 0.0, []
+    pred_lower = (prediction or "").lower()
+    missed = [kw for kw in expected_keywords if kw.lower() not in pred_lower]
+    hit = len(expected_keywords) - len(missed)
+    return hit / len(expected_keywords), missed
+
+
+def compute_keyword_metrics(records: list["EvalRecord"]) -> dict:
+    """关键词召回聚合指标：平均召回率 + 达标率（recall ≥ 阈值）"""
+    kw_records = [r for r in records if r.expected_keywords]
+    n = len(kw_records)
+    if n == 0:
+        return {}
+    recalls = [r.keyword_recall or 0.0 for r in kw_records]
+    passed = sum(1 for r in recalls if r >= KEYWORD_RECALL_THRESHOLD)
+    return {
+        "total": n,
+        "avg_recall": round(statistics.mean(recalls) * 100, 1),
+        "pass_rate": round(passed / n * 100, 1),
+        "pass_n": f"{passed}/{n}",
+        "threshold": KEYWORD_RECALL_THRESHOLD,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -211,11 +372,15 @@ def load_custom_suite(suite_path: str) -> list[EvalCase]:
             cases.append(EvalCase(
                 case_id=data.get("case_id", data.get("task_id", "")),
                 question=data["question"],
-                expected_answer=data["expected_answer"],
+                # 裁定级用例可只给 expected_verdict，不给 expected_answer
+                expected_answer=data.get("expected_answer", data.get("expected_verdict", "")),
                 level=data.get("level", 1),
                 tags=data.get("tags", []),
                 file_path=data.get("file_path"),
                 image_path=data.get("image_path"),
+                expected_verdict=data.get("expected_verdict"),
+                stage=data.get("stage"),
+                expected_keywords=data.get("expected_keywords"),
             ))
     return cases
 
@@ -338,6 +503,7 @@ class EvalHarness:
                     task=task_prompt,
                     image_path=case.image_path,
                     max_steps=self.max_steps,
+                    stage=case.stage,
                 )
                 elapsed = time.time() - start_time
                 prediction = result.answer
@@ -356,7 +522,17 @@ class EvalHarness:
                 step_count = 0
                 logger.error("Case %s 执行异常: %s", case.case_id[:8], e)
 
-            is_correct = match_answer(prediction, case.expected_answer)
+            # 评分模式三选一：裁定级 / 关键词召回 / GAIA 子串
+            predicted_verdict = None
+            keyword_recall = None
+            if case.expected_verdict:
+                predicted_verdict = classify_prediction_verdict(prediction)
+                is_correct = predicted_verdict == case.expected_verdict
+            elif case.expected_keywords:
+                keyword_recall, _missed = score_keyword_recall(prediction, case.expected_keywords)
+                is_correct = keyword_recall >= KEYWORD_RECALL_THRESHOLD
+            else:
+                is_correct = match_answer(prediction, case.expected_answer)
 
             record_dict = {
                 "case_id": case.case_id,
@@ -372,6 +548,10 @@ class EvalHarness:
                 "tags": case.tags,
                 "agent_success": agent_success,
                 "timestamp": datetime.now().isoformat(),
+                "expected_verdict": case.expected_verdict,
+                "predicted_verdict": predicted_verdict,
+                "expected_keywords": case.expected_keywords,
+                "keyword_recall": round(keyword_recall, 3) if keyword_recall is not None else None,
             }
 
             failure_mode = extract_failure_mode(record_dict)
@@ -385,7 +565,12 @@ class EvalHarness:
 
             status = "✅" if is_correct else "❌"
             fm_str = f" [{failure_mode}]" if failure_mode else ""
-            print(f"  {status}{fm_str} Pred: {prediction[:80]} | GT: {case.expected_answer}")
+            if case.expected_verdict:
+                print(f"  {status}{fm_str} Verdict: {predicted_verdict} | GT: {case.expected_verdict}")
+            elif case.expected_keywords:
+                print(f"  {status}{fm_str} Keyword recall: {keyword_recall:.0%} (need ≥{KEYWORD_RECALL_THRESHOLD:.0%})")
+            else:
+                print(f"  {status}{fm_str} Pred: {prediction[:80]} | GT: {case.expected_answer}")
 
             done = len(records)
             correct_so_far = sum(1 for r in records if r.correct)
@@ -431,6 +616,8 @@ class EvalHarness:
             avg_steps=round(statistics.mean(steps_list), 1) if steps_list else 0,
             failure_mode_dist=dict(failure_modes),
             per_tag_accuracy={k: round(v, 1) for k, v in per_tag_accuracy.items()},
+            verdict_metrics=compute_verdict_metrics(records),
+            keyword_metrics=compute_keyword_metrics(records),
             config_snapshot={
                 "max_trials": self.max_trials,
                 "max_steps": self.max_steps,
@@ -469,6 +656,26 @@ class EvalHarness:
             print(f"\n  Per-Tag Accuracy:")
             for tag, acc in sorted(report.per_tag_accuracy.items()):
                 print(f"    {tag:<20} {acc:.1f}%")
+
+        vm = report.verdict_metrics
+        if vm:
+            print(f"\n  Verdict Metrics (n={vm['total']}):")
+            print(f"    Accuracy:           {vm['accuracy']:.1f}%  ({vm['correct']}/{vm['total']})")
+            print(f"    False-positive rate:{vm['false_positive_rate']:>6.1f}%  ({vm['false_positive_n']}) — 把靠谱判成有坑")
+            print(f"    Miss rate:          {vm['miss_rate']:>6.1f}%  ({vm['miss_n']}) — 把诈骗判成靠谱")
+            print(f"    Refusal rate:       {vm['refusal_rate']:>6.1f}%  ({vm['refusal_n']}) — 无裁定")
+            print(f"\n  Confusion (expected → predicted):")
+            for exp in VERDICT_LEVELS:
+                row = vm["confusion"].get(exp)
+                if row:
+                    cells = ", ".join(f"{k}:{v}" for k, v in sorted(row.items()))
+                    print(f"    {exp:<14} → {cells}")
+
+        km = report.keyword_metrics
+        if km:
+            print(f"\n  Keyword-Recall Metrics (n={km['total']}, stage2 定向清单):")
+            print(f"    Avg recall:  {km['avg_recall']:.1f}%  — 平均命中预置差距关键词比例")
+            print(f"    Pass rate:   {km['pass_rate']:.1f}%  ({km['pass_n']}) — recall ≥ {km['threshold']:.0%} 判达标")
 
         print(f"{'═' * 60}\n")
 
@@ -519,6 +726,45 @@ def analyze_results(path: str):
             pct = count / failed * 100 if failed > 0 else 0
             bar = "█" * int(pct / 5)
             print(f"    {mode:<20} {count:>3} ({pct:4.0f}%) {bar}")
+
+    # 裁定级指标（从 JSONL dict 重建 EvalRecord 后复用 compute_verdict_metrics）
+    verdict_dicts = [r for r in records if r.get("expected_verdict")]
+    if verdict_dicts:
+        recs = [
+            EvalRecord(
+                case_id=r.get("case_id", ""), question=r.get("question", ""),
+                expected_answer=r.get("expected_answer", ""),
+                prediction=r.get("prediction", ""), correct=r.get("correct", False),
+                trials_used=r.get("trials_used", 0), elapsed_seconds=r.get("elapsed_seconds", 0),
+                expected_verdict=r.get("expected_verdict"),
+                predicted_verdict=r.get("predicted_verdict"),
+            )
+            for r in verdict_dicts
+        ]
+        vm = compute_verdict_metrics(recs)
+        print(f"\n  Verdict Metrics (n={vm['total']}):")
+        print(f"    Accuracy:            {vm['accuracy']:.1f}%  ({vm['correct']}/{vm['total']})")
+        print(f"    False-positive rate: {vm['false_positive_rate']:.1f}%  ({vm['false_positive_n']})")
+        print(f"    Miss rate:           {vm['miss_rate']:.1f}%  ({vm['miss_n']})")
+        print(f"    Refusal rate:        {vm['refusal_rate']:.1f}%  ({vm['refusal_n']})")
+
+    keyword_dicts = [r for r in records if r.get("expected_keywords")]
+    if keyword_dicts:
+        recs = [
+            EvalRecord(
+                case_id=r.get("case_id", ""), question=r.get("question", ""),
+                expected_answer=r.get("expected_answer", ""),
+                prediction=r.get("prediction", ""), correct=r.get("correct", False),
+                trials_used=r.get("trials_used", 0), elapsed_seconds=r.get("elapsed_seconds", 0),
+                expected_keywords=r.get("expected_keywords"),
+                keyword_recall=r.get("keyword_recall"),
+            )
+            for r in keyword_dicts
+        ]
+        km = compute_keyword_metrics(recs)
+        print(f"\n  Keyword-Recall Metrics (n={km['total']}):")
+        print(f"    Avg recall:  {km['avg_recall']:.1f}%")
+        print(f"    Pass rate:   {km['pass_rate']:.1f}%  ({km['pass_n']}, recall ≥ {km['threshold']:.0%})")
 
     print(f"{'═' * 60}\n")
 
@@ -634,6 +880,13 @@ def main():
             cases = load_gaia_suite(levels=[2], subset=getattr(args, "subset", None))
         elif suite == "gaia_all":
             cases = load_gaia_suite(levels=[1, 2, 3], subset=getattr(args, "subset", None))
+        elif suite == "offercheck":
+            # OfferCheck 裁定级评测集（求职诈骗/存疑/正常，带 expected_verdict）
+            oc_path = Path(__file__).parent.parent / "offercheck" / "eval_suite" / "cases.jsonl"
+            if not oc_path.exists():
+                print(f"❌ OfferCheck 评测集不存在: {oc_path}")
+                sys.exit(1)
+            cases = load_custom_suite(str(oc_path))
         elif Path(suite).exists():
             cases = load_custom_suite(suite)
         else:
