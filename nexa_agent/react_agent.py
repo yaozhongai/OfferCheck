@@ -555,22 +555,34 @@ def attribute_sources(
     }
 
 
+def _as_str_list(v) -> list:
+    """把 submit_verdict 的列表型字段规整为字符串列表。
+
+    模型（尤其换用 DeepSeek-V4 后）可能把本应是数组的 evidence/red_flags 传成
+    单个字符串——若直接 `for x in v` 会按字符遍历，导致每个字符渲染成一条 [Fact]/
+    [RedFlag]（曾见 663 条单字符事实）。这里统一：str→单元素、非序列→单元素、
+    序列→逐项 str，并丢掉空串。
+    """
+    if not v:
+        return []
+    if isinstance(v, str) or not isinstance(v, (list, tuple)):
+        v = [v]
+    return [s for s in (str(x).strip() for x in v) if s]
+
+
 def _render_verdict(fields: dict) -> str:
     """把 submit_verdict 的结构化字段渲染为标准裁定文本。"""
     lines = []
     verdict = (fields.get("verdict") or "").strip()
     summary = (fields.get("summary") or "").strip()
     lines.append(f"[Verdict] {verdict} —— {summary}".rstrip(" —"))
-    for ev in fields.get("evidence") or []:
-        ev = str(ev).strip()
+    for ev in _as_str_list(fields.get("evidence")):
         # 模型可能已在 evidence 里自带 [Fact]/[Source]/[Confidence] 标签，
         # 此时原样保留，避免出现 "[Fact] [Fact] ..." 双标签
         lines.append(ev if ev.lstrip().startswith("[") else f"[Fact] {ev}")
-    for rf in fields.get("red_flags") or []:
-        rf = str(rf).strip()
+    for rf in _as_str_list(fields.get("red_flags")):
         lines.append(rf if rf.lstrip().startswith("[") else f"[RedFlag] {rf}")
-    for nc in fields.get("need_user_confirm") or []:
-        nc = str(nc).strip()
+    for nc in _as_str_list(fields.get("need_user_confirm")):
         lines.append(nc if nc.lstrip().startswith("[") else f"[NeedUserConfirm] {nc}")
     return "\n".join(lines)
 
@@ -1046,7 +1058,7 @@ def react_loop(
                 return _finalize(
                     final_answer, reason="submit_verdict",
                     summary_for_user=(fields.get("summary_for_user") or "").strip(),
-                    suggested_followups=[str(x).strip() for x in (fields.get("suggested_followups") or []) if str(x).strip()],
+                    suggested_followups=_as_str_list(fields.get("suggested_followups")),
                 )
 
             for tc in msg.tool_calls:
