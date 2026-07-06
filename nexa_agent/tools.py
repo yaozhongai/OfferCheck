@@ -135,6 +135,21 @@ def _submit_verdict_tool_def() -> Dict[str, Any]:
                         "items": {"type": "string"},
                         "description": "证据不足、需用户自行确认的事项（可空）",
                     },
+                    "summary_for_user": {
+                        "type": "string",
+                        "description": (
+                            "面向用户的 2-4 句摘要：用自然、可读的话把裁定与关键发现讲清楚，"
+                            "**只能基于上面已取证的 evidence，不得引入新结论**。这是展示在对话气泡里的话。"
+                        ),
+                    },
+                    "suggested_followups": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "2-3 条建议用户继续深入的具体问题/行动（如'把 HR 邮箱发我，我核实域名是否仿冒'、"
+                            "'要不要我查这家公司最近的融资/裁员新闻'）。每条应能被一次新的取证式调查执行。"
+                        ),
+                    },
                 },
                 "required": ["verdict", "summary", "evidence"],
             },

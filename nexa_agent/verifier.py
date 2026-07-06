@@ -35,6 +35,86 @@ logger = get_logger("verifier")
 
 
 # ==========================================================================
+# JSON 提取 / 截断修复（Verifier CoVe 响应容错）
+# ==========================================================================
+
+def _extract_json_block(text: str) -> Optional[str]:
+    """从 LLM 响应里抠出最外层 JSON 对象。
+
+    容错 markdown 代码围栏（```json ... ```）与前后夹带的说明文字，
+    从第一个 `{` 起做括号配对（忽略字符串内的括号）取到匹配的 `}`。
+    截断（无匹配闭合）时返回从 `{` 到结尾的整段，交给修复函数补齐。
+    """
+    if not text:
+        return None
+    t = text.strip()
+    t = re.sub(r"^```(?:json)?\s*", "", t)
+    t = re.sub(r"\s*```$", "", t)
+    start = t.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(t)):
+        ch = t[i]
+        if esc:
+            esc = False
+            continue
+        if ch == "\\" and in_str:
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return t[start:i + 1]
+    # 未闭合 → 截断，返回整段供修复
+    return t[start:]
+
+
+def _repair_truncated_json(s: str) -> str:
+    """补齐被 max_tokens 截断的 JSON：闭合未结束的字符串与括号。
+
+    尽力而为——去掉尾部残缺 token 后，按栈补上缺失的 `]` / `}`。
+    修复后仍可能非法（如遗留尾逗号），由调用方 try/except 兜底。
+    """
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for ch in s:
+        if esc:
+            esc = False
+            continue
+        if ch == "\\" and in_str:
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch in "}]" and stack:
+            stack.pop()
+    repaired = s
+    if in_str:
+        repaired += '"'
+    # 去掉尾部残缺片段（截断在逗号/冒号/未完成键值处）
+    repaired = re.sub(r"[,:]\s*$", "", repaired.rstrip())
+    for opener in reversed(stack):
+        repaired += "}" if opener == "{" else "]"
+    return repaired
+
+
+# ==========================================================================
 # 数据结构
 # ==========================================================================
 
@@ -280,8 +360,8 @@ class VerifierAgent:
                 f"    自评: {f['confidence']}\n\n"
             )
 
-        if stage and "stage4" in stage:
-            source_criteria = """来源可信度判断标准（OfferCheck offer 证伪专用）:
+        if stage and ("stage4" in stage or "stage3" in stage):
+            source_criteria = """来源可信度判断标准（OfferCheck offer/沟通 证伪专用）:
 - 官方网站/官方社交媒体（LinkedIn 官方账号/Twitter 官方/微博官方）→ 可靠
 - 主流新闻媒体（搜狐、网易、36Kr、InfoQ 等转载报道）→ 基本可靠（媒体报道，非 UGC）
 - Wikipedia/权威媒体 → 基本可靠
@@ -350,7 +430,9 @@ class VerifierAgent:
                 {"role": "system", "content": "你是事实核查员。只输出 JSON，不要输出其他内容。"},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": 768,
+            # CoVe 逐条核查每条事实产出一个 JSON 对象，6-8 条事实 + 理由
+            # 极易超过旧上限 768 → JSON 被截断 → "无法解析，默认放行"。放大到 2048。
+            "max_tokens": 2048,
             "temperature": 0.0,
             "stream": False,
         }
@@ -379,17 +461,21 @@ class VerifierAgent:
 
     def _parse_cove_response(self, text: str, facts: list[dict]) -> VerdictResult:
         """解析 CoVe factored 核查响应（逐条事实 + 总体结论）"""
-        # 提取最外层 JSON（可能包含嵌套的 fact_verdicts 数组）
-        json_match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not json_match:
+        block = _extract_json_block(text)
+        if not block:
             logger.warning("CoVe 响应无法提取 JSON，默认放行: %s", text[:200])
             return VerdictResult(status="unverified", reason="Verifier 无法解析，默认放行")
 
         try:
-            data = json.loads(json_match.group(0))
+            data = json.loads(block)
         except json.JSONDecodeError:
-            logger.warning("CoVe JSON 解析失败，默认放行: %s", text[:200])
-            return VerdictResult(status="unverified", reason="Verifier 无法解析，默认放行")
+            # 常见于 max_tokens 截断：尝试补齐未闭合的括号后再解析一次
+            try:
+                data = json.loads(_repair_truncated_json(block))
+                logger.info("CoVe JSON 疑似被截断，已修复后解析成功")
+            except json.JSONDecodeError:
+                logger.warning("CoVe JSON 解析失败（修复后仍失败），默认放行: %s", text[:200])
+                return VerdictResult(status="unverified", reason="Verifier 无法解析，默认放行")
 
         overall = data.get("overall", "verified")
         reason = data.get("reason", "")

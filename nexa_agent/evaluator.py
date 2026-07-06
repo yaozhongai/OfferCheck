@@ -406,8 +406,8 @@ class Evaluator:
                 trajectory[:800] + "\n...(中间省略)...\n" + trajectory[-700:]
             )
 
-        if stage and "stage4" in stage:
-            criteria = """评估标准（OfferCheck Stage 4 — offer 证伪专用）：
+        if stage and ("stage4" in stage or "stage3" in stage):
+            criteria = """评估标准（OfferCheck offer/沟通 证伪专用）：
 1. 裁定是否给出三态之一：「靠谱」「存疑」「大概率有坑」？（必须有，否则失败）
 2. 裁定是否绑定了真实检索到的证据？（而非凭空判断）
 3. 是否识别并列出了 red_flags，或明确说明「无」？

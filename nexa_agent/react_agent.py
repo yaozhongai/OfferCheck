@@ -82,6 +82,35 @@ DEFAULT_MAX_STEPS = 10
 # 强制取证 gate：裁定型输出在零检索时被拦截的最大次数（避免死锁）
 MAX_EVIDENCE_GATE_NAGS = 2
 
+# LLM 瞬时错误重试（GMI 网关 Connection error / 超时 / 5xx / 429 常见，重试可自愈；
+# 4xx 请求错误不重试——协议/参数问题，见 CLAUDE.md GMI 约束）
+LLM_MAX_RETRIES = 3
+LLM_RETRY_BASE_DELAY = 1.0  # 秒；指数退避 base（1s → 2s → 4s）
+try:
+    from openai import (
+        APIConnectionError as _APIConnectionError,
+        APITimeoutError as _APITimeoutError,
+        InternalServerError as _InternalServerError,
+        RateLimitError as _RateLimitError,
+    )
+    _TRANSIENT_LLM_ERRORS: Tuple[type, ...] = (
+        _APIConnectionError, _APITimeoutError, _InternalServerError, _RateLimitError,
+    )
+except ImportError:  # openai 版本差异兜底
+    _TRANSIENT_LLM_ERRORS = ()
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    """是否为可重试的瞬时错误（连接/超时/5xx/429）。4xx（400/422）返回 False。"""
+    if _TRANSIENT_LLM_ERRORS and isinstance(exc, _TRANSIENT_LLM_ERRORS):
+        return True
+    # 兜底：按错误文本判断（未装到具体异常类型时）
+    msg = str(exc).lower()
+    if any(k in msg for k in ("connection", "timeout", "timed out", "temporarily", "econnreset")):
+        return True
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    return isinstance(status, int) and status in (429, 500, 502, 503, 504)
+
 # System Prompt 路径
 _PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 _SYSTEM_PROMPT_PATH = os.path.join(_PROMPTS_DIR, "react_system.txt")
@@ -111,6 +140,11 @@ def load_system_prompt(stage: Optional[str] = None) -> str:
     else:
         logger.warning("System Prompt 文件不存在: %s，使用内置 Prompt", _SYSTEM_PROMPT_PATH)
         base_prompt = _builtin_system_prompt()
+
+    # 注入实时日期，作为检索时效性基准（{{CURRENT_DATE}} 占位符）
+    from datetime import datetime
+    today = datetime.now().strftime("%Y年%m月%d日")
+    base_prompt = base_prompt.replace("{{CURRENT_DATE}}", today)
 
     stage_prompt = _load_stage_prompt(stage)
     if stage_prompt:
@@ -244,8 +278,12 @@ def call_llm_with_tools(
     enable_thinking: bool = False,
     max_tokens: int = 4096,
     model: Optional[str] = None,
+    on_retry: Optional[Callable[[int, Exception], None]] = None,
 ):
     """调用 DeepSeek LLM 并返回完整 choice（支持 tool_calls）
+
+    对瞬时错误（连接/超时/5xx/429）指数退避重试 LLM_MAX_RETRIES 次；4xx 不重试直接抛。
+    on_retry(attempt, exc)：每次重试前回调（供上层发 trace 事件）。
 
     Returns:
         (choice, prompt_tokens, completion_tokens)
@@ -269,7 +307,23 @@ def call_llm_with_tools(
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
     t0 = time.time()
-    response = client.chat.completions.create(**kwargs)
+    response = None
+    for attempt in range(LLM_MAX_RETRIES + 1):
+        try:
+            response = client.chat.completions.create(**kwargs)
+            break
+        except Exception as exc:  # noqa: BLE001
+            if attempt >= LLM_MAX_RETRIES or not _is_transient_llm_error(exc):
+                raise
+            delay = LLM_RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning("LLM 瞬时错误，%.1fs 后重试 (%d/%d): %s",
+                           delay, attempt + 1, LLM_MAX_RETRIES, exc)
+            if on_retry is not None:
+                try:
+                    on_retry(attempt + 1, exc)
+                except Exception:  # noqa: BLE001
+                    pass
+            time.sleep(delay)
     elapsed_ms = (time.time() - t0) * 1000
 
     choice = response.choices[0]
@@ -286,6 +340,138 @@ def call_llm_with_tools(
         "on" if enable_thinking and "pro" in actual_model.lower() else "off",
     )
 
+    return choice, prompt_tokens, completion_tokens
+
+
+_FINAL_ANSWER_RE = re.compile(r"(?:Final\s+Answer|最终答案)\s*[:：]\s*", re.IGNORECASE)
+_THOUGHT_PREFIX_RE = re.compile(r"^\s*(?:Thought|思考)\s*[:：]")
+
+
+def _stream_answer_portion(acc: str) -> str:
+    """从流式累积内容里抽出"面向用户的答案"部分，剔除 Thought 推理脚手架。
+
+    - 出现 "Final Answer:" → 取其后为答案；
+    - 以 "Thought:" 开头且尚无 Final Answer → 仍是推理，返回空（先不流式）；
+    - 其它 → 视为纯文本答案，整段返回。
+    这样 tool 步骤里泄漏的 "Thought: ..." 不会被逐字吐给用户。"""
+    m = _FINAL_ANSWER_RE.search(acc)
+    if m:
+        return acc[m.end():]
+    if _THOUGHT_PREFIX_RE.match(acc):
+        return ""
+    return acc
+
+
+def stream_llm_with_tools(
+    messages: List[dict],
+    tools: List[dict],
+    on_delta: Callable[[str], None],
+    enable_thinking: bool = False,
+    max_tokens: int = 4096,
+    model: Optional[str] = None,
+    on_retry: Optional[Callable[[int, Exception], None]] = None,
+):
+    """流式 LLM 调用（用于 answer-mode 逐 token 回复）。
+
+    content 增量通过 on_delta 逐段回调；**只有纯文本回答才流式**——一旦检测到 tool_calls
+    就停止 on_delta（工具步骤不该逐字吐给用户）。返回与 call_llm_with_tools 相同的
+    (choice, prompt_tokens, completion_tokens)，choice 为鸭子类型对象，可无缝喂给现有
+    react_loop 的 情况1（tool_calls）/ 情况2（文本）逻辑，无需改动下游。
+    """
+    import types as _types
+
+    client = _get_llm_client()
+    actual_model = model or LLM_MODEL
+    kwargs = {
+        "model": actual_model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "tools": tools,
+    }
+    if SUPPORTS_THINKING_PARAM:
+        if enable_thinking and "pro" in actual_model.lower():
+            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+        elif "deepseek" in actual_model.lower():
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+
+    stream = None
+    for attempt in range(LLM_MAX_RETRIES + 1):
+        try:
+            stream = client.chat.completions.create(**kwargs)
+            break
+        except Exception as exc:  # noqa: BLE001
+            if attempt >= LLM_MAX_RETRIES or not _is_transient_llm_error(exc):
+                raise
+            delay = LLM_RETRY_BASE_DELAY * (2 ** attempt)
+            if on_retry is not None:
+                try:
+                    on_retry(attempt + 1, exc)
+                except Exception:  # noqa: BLE001
+                    pass
+            time.sleep(delay)
+
+    acc_content = ""
+    tool_slots: dict = {}
+    is_tool = False
+    emitted = 0  # 已通过 on_delta 吐出的"答案部分"长度
+    prompt_tokens = completion_tokens = 0
+    finish_reason = "stop"
+
+    for chunk in stream:
+        usage = getattr(chunk, "usage", None)
+        if usage:
+            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        if not getattr(chunk, "choices", None):
+            continue
+        ch0 = chunk.choices[0]
+        if getattr(ch0, "finish_reason", None):
+            finish_reason = ch0.finish_reason
+        delta = ch0.delta
+        if getattr(delta, "tool_calls", None):
+            is_tool = True  # 这是工具步：停止逐字流式（推理不吐给用户）
+            for tc in delta.tool_calls:
+                slot = tool_slots.setdefault(tc.index, {"id": None, "type": "function", "name": "", "args": ""})
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                if getattr(tc, "type", None):
+                    slot["type"] = tc.type
+                fn = getattr(tc, "function", None)
+                if fn:
+                    if getattr(fn, "name", None):
+                        slot["name"] += fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["args"] += fn.arguments
+        piece = getattr(delta, "content", None)
+        if piece:
+            acc_content += piece
+            # 只逐字流式"答案部分"（剔除 Thought 脚手架），且仅在非工具步
+            if not is_tool:
+                ans = _stream_answer_portion(acc_content)
+                if len(ans) > emitted:
+                    try:
+                        on_delta(ans[emitted:])
+                    except Exception:  # noqa: BLE001
+                        pass
+                    emitted = len(ans)
+
+    tool_calls_objs = None
+    if tool_slots:
+        tool_calls_objs = [
+            _types.SimpleNamespace(
+                id=s["id"], type=s["type"],
+                function=_types.SimpleNamespace(name=s["name"], arguments=s["args"]),
+            )
+            for _, s in sorted(tool_slots.items())
+        ]
+    msg = _types.SimpleNamespace(
+        content=(acc_content or None), tool_calls=tool_calls_objs, reasoning_content=None,
+    )
+    choice = _types.SimpleNamespace(message=msg, finish_reason=finish_reason)
+    logger.info("LLM 流式调用完成 model=%s tokens(in=%d out=%d) tool_calls=%s",
+                actual_model, prompt_tokens, completion_tokens, bool(tool_calls_objs))
     return choice, prompt_tokens, completion_tokens
 
 
@@ -398,13 +584,29 @@ def _render_verdict(fields: dict) -> str:
 def _answer_requires_evidence(final_answer: str, stage: Optional[str]) -> bool:
     """判断该 Final Answer 是否属于"必须取证"的裁定/事实型输出。
 
-    命中条件：处于 OfferCheck 阶段任务，或答案里出现裁定/溯源标签。
+    命中条件：处于 OfferCheck 调查阶段任务，或答案里出现裁定/溯源标签。
     纯计算/纯常识类（stage=None 且无 [Source]/[Verdict]）不强制。
+    stage2（简历定向）是对用户提供文本的分析、不做联网证伪，故不强制取证——
+    仅当它反常地自带裁定/溯源标签时才要求。
     """
+    markers = ("[Verdict]", "[Source]", "[Fact]", "[RedFlag]")
+    if stage and ("stage2" in stage):
+        return any(m in final_answer for m in markers)
     if stage:
         return True
-    markers = ("[Verdict]", "[Source]", "[Fact]", "[RedFlag]")
     return any(m in final_answer for m in markers)
+
+
+_VERDICT_LABELS = ("靠谱", "存疑", "大概率有坑", "推荐", "谨慎", "不推荐", "值得投递", "谨慎投递", "建议放弃")
+
+
+def _is_verdict_answer(final_answer: str) -> bool:
+    """该答案是否是裁定型输出（含 [Verdict] 标签或裁定标签词）。
+    answer-mode 下的非裁定对话式回答不走强制取证 gate。"""
+    if "[Verdict]" in final_answer:
+        return True
+    head = final_answer[:120]
+    return any(lbl in head for lbl in _VERDICT_LABELS)
 
 
 def _assistant_msg_to_dict(msg) -> dict:
@@ -522,13 +724,24 @@ def build_user_message(user_query: str, image_path: Optional[str] = None) -> dic
     """
     if image_path:
         abs_path = os.path.abspath(image_path)
-        content = (
-            f"用户问题: {user_query}\n\n"
-            f"注意: 用户上传了一张图片，路径为: {abs_path}\n"
-            f"如果需要分析这张图片，请使用 analyze_image（端侧快速）或 "
-            f"analyze_image_cloud（云端深度理解）工具。"
-            f"参数格式为: 图片路径 | 分析提示词"
-        )
+        # 按文件类型指路：PDF（简历/offer letter/合同）走 read_pdf 文本提取；
+        # 图片走 VLM OCR。此前对 PDF 也说「上传了图片…用 analyze_image」，
+        # 而 analyze_image_cloud 拒绝非图片扩展名，导致 PDF 附件死路。
+        if abs_path.lower().endswith(".pdf"):
+            content = (
+                f"用户问题: {user_query}\n\n"
+                f"注意: 用户上传了一个 PDF 文件（可能是简历、offer letter 或合同），"
+                f"路径为: {abs_path}\n"
+                f"请先使用 read_pdf 工具读取其文本内容，再基于内容继续任务。"
+            )
+        else:
+            content = (
+                f"用户问题: {user_query}\n\n"
+                f"注意: 用户上传了一张图片，路径为: {abs_path}\n"
+                f"如果需要分析这张图片，请使用 analyze_image（端侧快速）或 "
+                f"analyze_image_cloud（云端深度理解）工具。"
+                f"参数格式为: 图片路径 | 分析提示词"
+            )
     else:
         content = user_query
 
@@ -547,6 +760,7 @@ def react_loop(
     long_term_memory: Optional[list[str]] = None,
     stage: Optional[str] = None,
     on_event: Optional[Callable[[dict], None]] = None,
+    answer_mode: bool = False,
 ) -> dict:
     """ReAct 主循环 — 基于原生 tool calling
 
@@ -575,6 +789,16 @@ def react_loop(
         memory_sys = _build_memory_system_message(long_term_memory)
         if memory_sys:
             messages.append({"role": "system", "content": memory_sys})
+
+    # answer-mode（追问回答模式）：允许基于上文已取证结论直接对话式作答，
+    # 只在确需新外部事实时才重新调查。注入一条 system 指令引导。
+    if answer_mode:
+        messages.append({"role": "system", "content": (
+            "【追问回答模式】这是一次针对已有调查结论的追问。若该问题能**基于上文已取证的证据/结论**"
+            "直接回答，就用自然、对话式的中文文字**直接回答**，不必重新调查、也不必再套裁定标签或调用 "
+            "submit_verdict。仅当确实需要新的外部事实（上文没有）时才调用检索工具。"
+            "无论如何都不要凭记忆或常识编造未经查证的新结论。"
+        )})
 
     user_msg = build_user_message(user_query, image_path)
     messages.append(user_msg)
@@ -616,13 +840,43 @@ def react_loop(
 
     def _gate_should_block(final_answer: str) -> bool:
         """强制取证 gate：裁定/事实型输出但尚无成功检索 → 应拦截（额度内）。"""
+        # answer-mode 的非裁定对话式回答：基于上文已取证结论作答，不强制新检索
+        if answer_mode and not _is_verdict_answer(final_answer):
+            return False
         return (
             _answer_requires_evidence(final_answer, stage)
             and successful_retrievals == 0
             and evidence_gate_nags < MAX_EVIDENCE_GATE_NAGS
         )
 
-    def _finalize(final_answer: str, reason: str = "final_answer") -> dict:
+    def _build_structured_sources(final_answer: str) -> list[dict]:
+        """结构化来源列表：模型在答案中引用的 URL 优先，再用 seen_urls 回填并去重，
+        每条标注 verified（是否在真实检索记录中命中）。上限 12 条。"""
+        seen_norm = {_normalize_url(u) for u in seen_urls}
+        out: list[dict] = []
+        chosen: set[str] = set()
+
+        # 本地/内网地址不是真实来源（相对 URL、开发环境自引用等），过滤掉避免噪声
+        _LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+
+        def _add(u: str) -> None:
+            nu = _normalize_url(u)
+            dom = _url_domain(u)
+            if not dom or nu in chosen or len(out) >= 12:
+                return
+            if any(dom == h or dom.startswith(h + ":") for h in _LOCAL_HOSTS):
+                return
+            chosen.add(nu)
+            out.append({"url": u, "domain": dom, "verified": nu in seen_norm})
+
+        for u in _URL_RE.findall(final_answer):   # 模型引用的（含可能未验证的）
+            _add(u)
+        for u in sorted(seen_urls):               # 真实检索过的，回填保证非空
+            _add(u)
+        return out
+
+    def _finalize(final_answer: str, reason: str = "final_answer",
+                  summary_for_user: str = "", suggested_followups: Optional[list] = None) -> dict:
         """收尾：来源对账（AIS）→ 标注答案 → 打印/发射/策展 → 组装结果。"""
         called_tools = {name for name, _ in action_history}
         annotated, attribution = attribute_sources(final_answer, seen_urls, called_tools)
@@ -634,7 +888,12 @@ def react_loop(
         print(f"\n✅ Final Answer:\n{annotated}")
         logger.info("ReAct 完成 step=%d final_answer_len=%d unverified=%d",
                     step_count, len(annotated), attribution["unverified"])
-        _emit("final_answer", step=step_count, answer=annotated)
+        # 结构化来源直传前端（问题5）：优先模型在答案里引用的 URL，再用真实检索过的
+        # seen_urls 回填，保证只要有过检索就一定有稳定来源；verified=是否在检索记录中命中。
+        structured_sources = _build_structured_sources(final_answer)
+        _emit("final_answer", step=step_count, answer=annotated, sources=structured_sources,
+              summary_for_user=summary_for_user or "",
+              suggested_followups=suggested_followups or [])
         _print_summary(step_count, total_prompt_tokens, total_completion_tokens)
         _curation_step(verbose=verbose)
         return {
@@ -704,13 +963,27 @@ def react_loop(
 
         try:
             step_max_tokens = 8192 if enable_thinking else 4096
-            choice, prompt_tok, completion_tok = call_llm_with_tools(
-                messages,
-                tools=tool_defs,
-                enable_thinking=enable_thinking,
-                model=step_model,
-                max_tokens=step_max_tokens,
-            )
+            _on_retry = lambda attempt, exc: _emit(
+                "retry", step=step_count, attempt=attempt,
+                max_attempts=LLM_MAX_RETRIES, error=str(exc)[:200])
+            if answer_mode:
+                # answer-mode：流式调用，纯文本回答逐 token 发 answer_delta（供前端打字机渲染）。
+                # 任何流式异常都回退到非流式调用，保证不因流式破坏本轮。
+                try:
+                    choice, prompt_tok, completion_tok = stream_llm_with_tools(
+                        messages, tools=tool_defs, enable_thinking=enable_thinking,
+                        model=step_model, max_tokens=step_max_tokens, on_retry=_on_retry,
+                        on_delta=lambda t: _emit("answer_delta", step=step_count, text=t),
+                    )
+                except Exception as _sexc:  # noqa: BLE001
+                    logger.warning("流式调用失败，回退非流式: %s", _sexc)
+                    choice, prompt_tok, completion_tok = call_llm_with_tools(
+                        messages, tools=tool_defs, enable_thinking=enable_thinking,
+                        model=step_model, max_tokens=step_max_tokens, on_retry=_on_retry)
+            else:
+                choice, prompt_tok, completion_tok = call_llm_with_tools(
+                    messages, tools=tool_defs, enable_thinking=enable_thinking,
+                    model=step_model, max_tokens=step_max_tokens, on_retry=_on_retry)
             total_prompt_tokens += prompt_tok
             total_completion_tokens += completion_tok
         except Exception as exc:
@@ -776,7 +1049,11 @@ def react_loop(
 
                 logger.info("Step %d: submit_verdict 提交裁定，结束调查", step_count)
                 _emit("action", step=step_count, tool=FINALIZE_TOOL, args="", thought=content[:500] if content else "")
-                return _finalize(final_answer, reason="submit_verdict")
+                return _finalize(
+                    final_answer, reason="submit_verdict",
+                    summary_for_user=(fields.get("summary_for_user") or "").strip(),
+                    suggested_followups=[str(x).strip() for x in (fields.get("suggested_followups") or []) if str(x).strip()],
+                )
 
             for tc in msg.tool_calls:
                 tool_name = tc.function.name

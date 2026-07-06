@@ -182,6 +182,7 @@ class ReflexionReActAgent:
         max_steps: Optional[int] = None,
         stage: Optional[str] = None,
         on_event: Optional[Callable[[dict], None]] = None,
+        answer_mode: bool = False,
     ) -> ReflexionResult:
         """执行带反思的完整任务流程
 
@@ -280,6 +281,7 @@ class ReflexionReActAgent:
                 long_term_memory=memories if memories else None,
                 stage=stage,
                 on_event=on_event,
+                answer_mode=answer_mode,
             )
 
             # 从轨迹中提取本轮访问过的 URL，累积到 visited_urls

@@ -158,6 +158,7 @@ class DeepSeekClient(BaseLLMClient):
                 api_key=self._api_key,
                 base_url=self._base_url,
                 timeout=self._timeout,
+                max_retries=3,  # SDK-level retry on transient errors (2nd line of defense)
             )
         return self._client
 
@@ -240,6 +241,7 @@ class KimiClient(BaseLLMClient):
                 api_key=self._api_key,
                 base_url=self._base_url,
                 timeout=self._timeout,
+                max_retries=3,  # SDK-level retry on transient errors (2nd line of defense)
             )
         return self._client
 
