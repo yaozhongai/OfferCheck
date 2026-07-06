@@ -29,11 +29,11 @@ _PROVIDER_PRESETS = {
     "gmi": {
         "base_url": os.environ.get("GMI_BASE_URL", "https://api.gmi-serving.com/v1"),
         "api_key": os.environ.get("GMI_API_KEY", ""),
-        # 全非思考模型：GMI 无法用参数关闭 V4 思考，思考模式在多轮 tool-calling
-        # 下强制回传 reasoning_content（否则 400），且常出现 reasoning-only 空 content。
-        # 换用非思考 instruct 模型从根上规避（实测见 docs/run_20260702_234927_failure_analysis.md）。
-        "strong_model": "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
-        "fast_model": "deepseek-ai/DeepSeek-V3.2",
+        # DeepSeek-V4：用 extra_body={"enable_thinking": bool} 控制思考（实测 GMI 接受不报错）。
+        # Flash 可被关闭思考→快而省，用于成本敏感的多步执行（react_main/反思/评估）；
+        # Pro 会忽略该参数仍思考，正好用于首步规划/verifier。统一走 thinking_extra_body()。
+        "strong_model": "deepseek-ai/DeepSeek-V4-Pro",
+        "fast_model": "deepseek-ai/DeepSeek-V4-Flash",
     },
     "deepseek": {
         "base_url": os.environ.get(
@@ -56,9 +56,29 @@ if LLM_PROVIDER not in _PROVIDER_PRESETS:
 
 _PRESET = _PROVIDER_PRESETS[LLM_PROVIDER]
 
-# thinking 开关是 DeepSeek 官方 API 的私有扩展参数；
-# GMI 等 OpenAI 兼容网关收到会报 422，必须跳过
+# DeepSeek 官方 API 用 {"thinking": {"type": ...}} 控制思考；GMI 收到该参数会 422。
+# 但 GMI 接受 vLLM 风格的 {"enable_thinking": bool}（实测）。两者由 thinking_extra_body 统一封装。
 SUPPORTS_THINKING_PARAM = LLM_PROVIDER == "deepseek"
+
+
+def thinking_extra_body(model: str, enable_thinking: bool) -> dict:
+    """按 provider 返回控制 thinking 的 extra_body（空 dict 表示不加任何参数）。
+
+    - gmi: {"enable_thinking": bool}
+        实测 GMI 接受该参数不报错；DeepSeek-V4-Flash 会真正关闭思考（reasoning_content 为空），
+        DeepSeek-V4-Pro 会忽略仍思考（无害，正好用于需要推理的首步/verifier）。
+    - deepseek 官方: {"thinking": {"type": "enabled"|"disabled"}}（仅 pro 支持开启）。
+    - 其他 provider: {}。
+    """
+    m = (model or "").lower()
+    if LLM_PROVIDER == "gmi":
+        return {"enable_thinking": bool(enable_thinking)}
+    if LLM_PROVIDER == "deepseek":
+        if enable_thinking and "pro" in m:
+            return {"thinking": {"type": "enabled"}}
+        if "deepseek" in m:
+            return {"thinking": {"type": "disabled"}}
+    return {}
 
 # ==========================================================================
 # 模型配置

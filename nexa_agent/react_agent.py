@@ -57,7 +57,7 @@ from nexa_agent.tools import (
     get_openai_tool_definitions,
 )
 from nexa_agent.config import (
-    MODEL_CONFIG, MODEL_TIER, SUPPORTS_THINKING_PARAM,
+    MODEL_CONFIG, MODEL_TIER, SUPPORTS_THINKING_PARAM, thinking_extra_body,
     get_model_for_role, DYNAMIC_UPGRADE_THRESHOLD,
 )
 
@@ -246,11 +246,9 @@ def call_llm(
     else:
         kwargs["stop"] = ["Observation:"]
 
-    if SUPPORTS_THINKING_PARAM:
-        if enable_thinking and "pro" in actual_model.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-        elif "deepseek" in actual_model.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    _eb = thinking_extra_body(actual_model, enable_thinking)
+    if _eb:
+        kwargs["extra_body"] = _eb
 
     t0 = time.time()
     response = client.chat.completions.create(**kwargs)
@@ -266,7 +264,7 @@ def call_llm(
     logger.info(
         "LLM 调用完成 model=%s elapsed=%.0fms tokens(in=%d out=%d total=%d) thinking=%s",
         actual_model, elapsed_ms, prompt_tokens, completion_tokens, total_tokens,
-        "on" if enable_thinking and "pro" in actual_model.lower() else "off",
+        "on" if enable_thinking else "off",
     )
 
     return content, prompt_tokens, completion_tokens
@@ -300,11 +298,9 @@ def call_llm_with_tools(
         "tools": tools,
     }
 
-    if SUPPORTS_THINKING_PARAM:
-        if enable_thinking and "pro" in actual_model.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-        elif "deepseek" in actual_model.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    _eb = thinking_extra_body(actual_model, enable_thinking)
+    if _eb:
+        kwargs["extra_body"] = _eb
 
     t0 = time.time()
     response = None
@@ -337,7 +333,7 @@ def call_llm_with_tools(
         "tool_calls=%s thinking=%s",
         actual_model, elapsed_ms, prompt_tokens, completion_tokens, total_tokens,
         has_tool_calls,
-        "on" if enable_thinking and "pro" in actual_model.lower() else "off",
+        "on" if enable_thinking else "off",
     )
 
     return choice, prompt_tokens, completion_tokens
@@ -390,11 +386,9 @@ def stream_llm_with_tools(
         "stream_options": {"include_usage": True},
         "tools": tools,
     }
-    if SUPPORTS_THINKING_PARAM:
-        if enable_thinking and "pro" in actual_model.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-        elif "deepseek" in actual_model.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    _eb = thinking_extra_body(actual_model, enable_thinking)
+    if _eb:
+        kwargs["extra_body"] = _eb
 
     stream = None
     for attempt in range(LLM_MAX_RETRIES + 1):

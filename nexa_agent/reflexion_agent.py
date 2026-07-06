@@ -50,7 +50,7 @@ from nexa_agent.evaluator import Evaluator, EvalResult, create_evaluator
 from nexa_agent.verifier import VerifierAgent, should_trigger_verifier
 from nexa_agent.config import (
     REFLEXION_CONFIG, REACT_CONFIG, MEMORY_CONFIG, PATH_CONFIG,
-    SUPPORTS_THINKING_PARAM, get_config_summary, get_model_for_role,
+    SUPPORTS_THINKING_PARAM, thinking_extra_body, get_config_summary, get_model_for_role,
 )
 
 logger = get_logger("reflexion_agent")
@@ -551,9 +551,10 @@ class ReflexionReActAgent:
             "stream": False,
         }
 
-        # DeepSeek thinking 关闭（反思不需要深度推理）
-        if SUPPORTS_THINKING_PARAM and "deepseek" in model.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        # 反思不需要深度推理 → 关闭思考（GMI Flash 生效；DeepSeek 官方走 thinking.disabled）
+        _eb = thinking_extra_body(model, enable_thinking=False)
+        if _eb:
+            kwargs["extra_body"] = _eb
 
         t0 = time.time()
         response = client.chat.completions.create(**kwargs)

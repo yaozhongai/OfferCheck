@@ -29,7 +29,7 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger
-from nexa_agent.config import MODEL_CONFIG, SUPPORTS_THINKING_PARAM, get_model_for_role
+from nexa_agent.config import MODEL_CONFIG, SUPPORTS_THINKING_PARAM, thinking_extra_body, get_model_for_role
 
 logger = get_logger("verifier")
 
@@ -436,8 +436,9 @@ class VerifierAgent:
             "temperature": 0.0,
             "stream": False,
         }
-        if SUPPORTS_THINKING_PARAM and "deepseek" in self.model.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        _eb = thinking_extra_body(self.model, enable_thinking=False)
+        if _eb:
+            kwargs["extra_body"] = _eb
 
         response = client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
