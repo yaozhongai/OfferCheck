@@ -179,8 +179,8 @@ export const DEMO_FORMS: Record<Stage, Record<string, string>> = {
     recruiter: "‘HR Manager’, contact only via Telegram @hr_fastjobs, no company email.",
   },
   stage4: {
-    offer: "Offer Letter — Meridian Pay Solutions Ltd.\nRole: Remote Financial Operations Associate\nSalary: USD 8,500 / month, paid weekly in USDT.\nHours: flexible, 100% remote, start immediately.\nSigning entity: Meridian Global Holdings (Hong Kong).\nHR contact: Telegram only. Please purchase your own $300 equipment kit from our partner; reimbursed in your first paycheck.",
-    hr: "Telegram @meridian_hr (no corporate email address provided)",
+    offer: "Offer Letter — Nexora Global Solutions Ltd.\nPosition: Remote Financial Operations Associate (no interview required)\nCompensation: USD 9,200 / month, paid weekly in USDT (crypto).\nLocation: 100% remote, flexible hours, immediate start.\nSigning entity: Everbright Holdings Group (Hong Kong).\nOnboarding: purchase a $320 equipment & software kit from our partner vendor; fully reimbursed in your first paycheck.\nNote: limited positions, please confirm within 24 hours.",
+    hr: "Telegram @nexora_hr only (no corporate email address provided)",
     link: "",
   },
 };
