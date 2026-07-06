@@ -64,7 +64,7 @@
 
 **当前阶段技术不做（有明确触发条件后再上）**
 10. **不引入 embedding / 向量检索**——现阶段记忆池 ≤10 条、LTM 数据为零、eval 15~20 条，Jaccard + 结构化实体键控足够；bge-m3 等自部署是过早优化。触发条件：LTM 积累 100+ 条真实反馈、需跨任务语义召回时再上。
-11. **不用思考模型**（见 §3.2）——GMI 上思考协议坑无法规避，改用非思考 instruct 模型。
+11. **思考模型分层使用**（见 §3.2，2026-07-06 更新）——原「不用思考模型」因 GMI 思考协议坑；发现 `enable_thinking` 可分层控制后改用 DeepSeek-V4：strong=Pro（保留思考）/ fast=Flash（关思考）。
 12. **不换 ReAct 范式**（见 §3.4）——幻觉与循环范式正交，换范式治不了幻觉。
 
 ---
@@ -75,10 +75,10 @@
 - **决策**：单仓库拆三层——`nexa_agent/`（headless 核心引擎，可 import/CLI，无 FastAPI/DB/UI）+ `offercheck/`（场景层）+ `server/`（唯一 FastAPI 后端）+ `web/`（Next.js 前端）。app/ 整体拆散：agent/tools/pipeline/streamlit 删除，llm→nexa_agent/llm，api/trace/storage/memory→server/。
 - **为什么**：① nexa_agent 场景无关可复用，是「Model + Harness = Agent，harness 跨任务复用」最硬的 DeepSeek 叙事；② 旧 app/ 的 LangGraph ReAct 较弱，被 nexa_agent 的 ReAct+Reflexion 取代；③ 引擎干净暴露 trace/接口本身就是 harness 工程能力。
 
-### 3.2 模型：GMI 全非思考模型
-- **决策**：`strong=Qwen/Qwen3-235B-A22B-Instruct-2507-FP8`、`fast=deepseek-ai/DeepSeek-V3.2`、`upgrade=moonshotai/Kimi-K2-Instruct-0905`；视觉 `google/gemini-3.1-flash-lite/pro-preview`。全部非思考（instruct）。
-- **为什么**：GMI 上 DeepSeek-V4 思考模型带来**无法规避**的协议坑——多轮 tool-calling 要求回传 `reasoning_content` 否则 400；reasoning-only 空响应（反思 2873 token 换 0 字）；且 GMI 不支持 `thinking` 参数（422），关不掉。实测非思考模型：零 400、零空响应、tool-calling 稳定。**幻觉问题不是靠思考模型解决的**（用思考模型那次同样失败），而是靠接地层（§3.3）。
-- **可逆性**：纯 `config.py` 的 `MODEL_TIER` 三行 / 环境变量，无逻辑锁定。
+### 3.2 模型：GMI DeepSeek-V4（enable_thinking 分层控制思考）
+- **决策**：`strong=deepseek-ai/DeepSeek-V4-Pro`、`fast=deepseek-ai/DeepSeek-V4-Flash`、`upgrade=moonshotai/Kimi-K2-Instruct-0905`；视觉 `google/gemini-3.1-flash-lite/pro-preview`。经 `extra_body={"enable_thinking": bool}` 分层控制：**Flash 关思考**（快而省，用于 react_main / 反思 / 评估），**Pro 保留思考**（用于首步规划 / verifier）。
+- **为什么（决策演进）**：早前定为「全非思考 instruct 模型」，因 GMI 上 DeepSeek-V4 思考模型有**看似无法规避**的协议坑——多轮 tool-calling 要求回传 `reasoning_content` 否则 400；reasoning-only 空响应（反思 2873 token 换 0 字）；且 DeepSeek 私有 `thinking` 参数在 GMI 报 422，关不掉。**新发现（2026-07-06 实测）**：GMI 接受 vLLM 风格的 `enable_thinking` 布尔参数（不是 DeepSeek 的 `thinking`）——Flash 会真正关闭思考、Pro 忽略仍思考；而 `_assistant_msg_to_dict` 早已正确回传 `reasoning_content`，实测多轮 tool-calling 零 400、首步产出 tool_calls 而非空响应。坑既已消解，遂改用能力更强的 V4 系列。**幻觉仍靠接地层（§3.3）解决，非靠思考模型**——这一条不变。
+- **可逆性**：纯 `config.py` 的 `MODEL_TIER` / `thinking_extra_body()` / 环境变量，无逻辑锁定。
 
 ### 3.3 防幻觉：接地层「纵深防御」四层（借鉴 Claude，非只加 prompt）
 - **背景**：回归中模型零工具调用、编造整份调查报告（假 GitHub 仓库/招聘页），三层校验全放行还自判「成功」。诊断：光靠 prompt 会被模型无视（stage prompt 本就要求调研，仍被跳过）。
@@ -123,7 +123,7 @@
 
 **已建成 ✅**
 - nexa_agent 核心引擎：ReAct（原生 tool calling）+ Reflexion + Verifier + Evaluator + Eval Harness + 12 工具 + 搜索 provider 层 + trace `on_event` 钩子
-- GMI 全非思考模型接入 + 端到端验证；reasoning_content 400 / extra_body 422 修复
+- GMI DeepSeek-V4 接入（`enable_thinking` 分层控制思考：Pro strong / Flash fast）+ 端到端验证；reasoning_content 多轮回传 / thinking 参数兼容
 - 接地层四件套（接地铁律 / 强制取证 gate / submit_verdict / AIS 对账）——回归验证幻觉路径被堵死
 - server：`/run_stage` + `/run_stage/stream`(SSE) 瘦调用引擎 + SSE keepalive（20s 心跳，防 proxy 断流）；web：Next.js Walking Skeleton
 - offercheck/ 骨架：stage1/stage4 prompt + domain_whois_lookup + 裁定标签

@@ -133,12 +133,12 @@ web/                           Next.js 前端
 
 ### 模型链路（LLM / VLM）
 
-比赛期主推理经 **GMI Cloud Inference Engine**（OpenAI 兼容）承载；无 GMI key 时回落 DeepSeek 官方 API。全部为**非思考（instruct）模型**——GMI 上思考协议坑无法规避（`reasoning_content` 400 / `thinking` 422 / reasoning-only 空响应），改用 instruct 模型稳定 tool-calling。
+比赛期主推理经 **GMI Cloud Inference Engine**（OpenAI 兼容）承载；无 GMI key 时回落 DeepSeek 官方 API。经 `extra_body={"enable_thinking": bool}` **分层控制思考**——fast 层（Flash）关思考保证快/省与稳定 tool-calling，strong 层（Pro）保留思考用于首步规划与裁定；多轮 tool-calling 的 `reasoning_content` 回传由引擎处理，实测零 400、首步产出 tool_calls 而非空响应。
 
 | Provider / 模型 | 层级 |
 |------|------|
-| GMI · `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` | strong（首步规划、裁定） |
-| GMI · `deepseek-ai/DeepSeek-V3.2` | fast（后续执行、反思、评估、教训提取） |
+| GMI · `deepseek-ai/DeepSeek-V4-Pro` | strong（首步规划、裁定；保留思考） |
+| GMI · `deepseek-ai/DeepSeek-V4-Flash` | fast（后续执行、反思、评估、教训提取；关思考） |
 | GMI · `moonshotai/Kimi-K2-Instruct-0905` | upgrade（tool-call 备援，动态升级） |
 | GMI · `google/gemini-3.1-flash-lite-preview` / `pro-preview` | vision（云端图片，空响应自动升级） |
 | DeepSeek 官方 API · Kimi 多模态 · llama.cpp/MiniCPM-V | 无 GMI key 时的回落 / 端侧 |
