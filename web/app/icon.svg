@@ -1,0 +1,16 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="oc-shield" x1="16" y1="2.5" x2="16" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#CF6A44"/>
+      <stop offset="1" stop-color="#A94A2C"/>
+    </linearGradient>
+  </defs>
+  <!-- Shield = protection / due-diligence -->
+  <path d="M16 2.5 L27 6.6 V15 C27 22 22.2 27.8 16 30 C9.8 27.8 5 22 5 15 V6.6 Z" fill="url(#oc-shield)"/>
+  <!-- Magnifier lens = active investigation -->
+  <circle cx="14.2" cy="14" r="5" stroke="#FFFFFF" stroke-width="2.3" fill="none"/>
+  <!-- Handle -->
+  <line x1="17.9" y1="17.7" x2="21.6" y2="21.4" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round"/>
+  <!-- Checkmark inside lens = verdict -->
+  <path d="M11.7 14.1 L13.5 15.9 L16.9 12" stroke="#FFFFFF" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
