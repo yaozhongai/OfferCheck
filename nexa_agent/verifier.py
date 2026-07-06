@@ -334,16 +334,25 @@ class VerifierAgent:
     # ── 快捷规则 ──
 
     def _quick_source_check(self, facts: list[dict]) -> Optional[VerdictResult]:
-        """用正则快速识别明显不可靠的来源，零 Token 开销"""
+        """用正则快速识别明显不可靠的来源，零 Token 开销
+
+        只有当 UGC/聚合站是**全部**事实的来源时才直接驳回；混合场景（如 whois/官方
+        一手数据为主、Reddit 同类案例仅作佐证——诈骗核查中很常见）交给 LLM 深度评估
+        权衡，避免一条补充引用枪毙整个 trial。
+        """
         unreliable = []
         for f in facts:
             source = f.get("source", "")
             for pattern, label in self._quick_reject_patterns:
                 if re.search(pattern, source, re.IGNORECASE):
                     unreliable.append({**f, "reject_reason": label})
+                    break
 
-        if unreliable:
+        if unreliable and len(unreliable) >= len(facts):
             return self._build_reject(unreliable, facts)
+        if unreliable:
+            logger.info("Verifier 快检: %d/%d 条事实引用 UGC 来源，交由 LLM 深度评估权衡",
+                        len(unreliable), len(facts))
         return None
 
     # ── LLM 深度评估 ──
@@ -373,9 +382,16 @@ class VerifierAgent:
 1. 核心裁定事实（公司是否存在、招聘是否真实）有 ≥2 个基本可靠以上的来源
 2. 有 ≥1 个官方一手来源支撑裁定
 3. 所有来源交叉一致且无矛盾，且核心来源可信度 Medium 及以上
+4. **证伪/负面裁定（"大概率有坑"/Likely a Scam）的特殊规则**：对不存在或冒名的实体，
+   **不可能**找到官方来源证明它是假的——"多渠道检索查无官方存在"（无官网/无注册记录/
+   无招聘平台记录）**本身就是核心证据**。当裁定为负面且满足以下两点即通过：
+   a) 有工具一手数据支撑（如 domain_whois_lookup 返回的注册时间/注册商、多次 web_search
+      的"查无结果"）——工具直接返回的数据视为**可靠一手来源**；
+   b) 与已知诈骗模式匹配（加密货币付薪、预付费用、仅 Telegram 联系、无面试直录等）。
 
 驳回规则（以下情况才驳回）:
-- 全部核心事实的来源都是不可靠来源（UGC/AI聚合站）
+- 全部核心事实的来源都是不可靠来源（UGC/AI聚合站）——注意：工具一手数据（whois/检索结果）
+  与"查无"类负面证据**不属于**不可靠来源，不要因此驳回
 - 发现来源与事实矛盾（如声称来自官网但实际是论坛帖子）"""
         else:
             source_criteria = """来源可信度判断标准:

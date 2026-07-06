@@ -81,6 +81,9 @@ DEFAULT_MAX_STEPS = 10
 
 # 强制取证 gate：裁定型输出在零检索时被拦截的最大次数（避免死锁）
 MAX_EVIDENCE_GATE_NAGS = 2
+# submit_verdict 参数为空/JSON 解析失败（常见于长调查后最终 JSON 被 max_tokens 截断）时，
+# 拒绝并要求重新提交的最大次数；超过则回退用 assistant 文本 / 原始参数收尾，绝不返回空裁定。
+MAX_SUBMIT_RETRY_NAGS = 2
 
 # LLM 瞬时错误重试（GMI 网关 Connection error / 超时 / 5xx / 429 常见，重试可自愈；
 # 4xx 请求错误不重试——协议/参数问题，见 CLAUDE.md GMI 约束）
@@ -821,8 +824,9 @@ def react_loop(
             "无论如何都不要凭记忆或常识编造未经查证的新结论。"
         )})
 
-    # 输出语言：跟随用户输入、默认英文——用一条高优先级 system 指令强制，
-    # 避免被中文系统提示 / stage prompt 带偏（埋在 react_system 里的规则不够强）。
+    # 输出语言：跟随用户输入、默认英文——两个方向都注入一条高优先级 system 指令强制。
+    # 英文方向防被中文系统提示带偏；中文方向防被 stage prompt 里的英文模板示例带偏
+    # （实测模型会照抄具体英文示例、无视抽象的"按输出语言给"规则）。
     if _detect_output_language(user_query) == "en":
         messages.append({"role": "system", "content": (
             "OUTPUT LANGUAGE — CRITICAL: The user's input is in English, so write your ENTIRE "
@@ -830,6 +834,13 @@ def react_loop(
             "[NeedUserConfirm] line, all summaries, section headings and the final checklist. "
             "Do NOT reply in Chinese. Keep the bracketed tag names ([Verdict], [Fact], …) "
             "in their English form."
+        )})
+    else:
+        messages.append({"role": "system", "content": (
+            "输出语言——最高优先级：用户输入是中文，所有面向用户的内容一律用**中文**——"
+            "包括 [Verdict] 后的裁定说明、[Fact]/[RedFlag]/[NeedUserConfirm] 各行、摘要、"
+            "小标题与清单（即使任务模板中的示例是英文，也必须译成中文输出）。"
+            "结构化标签名（[Verdict]、[Fact] 等）保持英文原形。"
         )})
 
     user_msg = build_user_message(user_query, image_path)
@@ -852,6 +863,7 @@ def react_loop(
     # 强制取证 gate：累计成功的检索类工具调用数 + gate 已提醒次数
     successful_retrievals = 0
     evidence_gate_nags = 0
+    submit_retry_nags = 0
     # 来源对账 registry：本次调查真实见过的 URL（观察全文，截断前收集）
     seen_urls: set[str] = set()
     # 步数预警：OfferCheck stage 下在步数耗尽前注入一次 submit_verdict 提示
@@ -1058,8 +1070,37 @@ def react_loop(
             if verdict_tc is not None:
                 try:
                     fields = _json.loads(verdict_tc.function.arguments or "{}")
+                    if not isinstance(fields, dict):
+                        fields = {}
                 except _json.JSONDecodeError:
                     fields = {}
+
+                # 空提交防护：verdict 与 summary 全空（常见于长调查后最终 JSON 被
+                # max_tokens 截断而解析失败）→ 拒绝并要求重新提交，绝不落一个空 [Verdict]。
+                if not ((fields.get("verdict") or "").strip() or (fields.get("summary") or "").strip()):
+                    submit_retry_nags += 1
+                    if submit_retry_nags <= MAX_SUBMIT_RETRY_NAGS:
+                        logger.warning("Step %d: submit_verdict 参数为空/解析失败，要求重新提交 (%d/%d)",
+                                       step_count, submit_retry_nags, MAX_SUBMIT_RETRY_NAGS)
+                        _emit("correction", step=step_count,
+                              message="submit_verdict 参数为空或 JSON 截断，已要求重新提交")
+                        messages.append({
+                            "role": "tool", "tool_call_id": verdict_tc.id,
+                            "content": "[System rejected] Your submit_verdict arguments were empty or "
+                                       "truncated/invalid JSON. Call submit_verdict again with COMPLETE "
+                                       "arguments — verdict, summary, evidence[], red_flags[]. Keep it "
+                                       "CONCISE (evidence ≤6 items, one sentence each) so the JSON "
+                                       "does not exceed the output limit.",
+                        })
+                        last_tool_success = False
+                        continue
+                    # 重试仍失败：用 assistant 文本内容兜底，避免空答案
+                    fallback_text = (content or "").strip() or (verdict_tc.function.arguments or "")[:2000]
+                    logger.error("Step %d: submit_verdict 连续空提交，回退文本收尾 len=%d",
+                                 step_count, len(fallback_text))
+                    return _finalize(fallback_text or "调查完成，但最终裁定提交失败——请重试或查看调查轨迹。",
+                                     reason="submit_verdict_fallback")
+
                 final_answer = _render_verdict(fields)
                 trajectory_parts.append(f"### Step {step_count}\nAction: {FINALIZE_TOOL}(...)")
 
