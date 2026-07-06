@@ -715,6 +715,21 @@ def parse_llm_response(text: str) -> dict:
 # 用户消息构建
 # ==========================================================================
 
+def _detect_output_language(text: str) -> str:
+    """粗略判断用户输入主语言，决定输出语言：CJK 占比高→zh，否则→en。
+
+    仅统计 CJK 与拉丁字母的相对占比，因此跨阶段上下文里少量中文框架词
+    （如「[本阶段任务]」）不会把一大段英文材料误判成中文。
+    """
+    if not text:
+        return "en"
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿" or "぀" <= ch <= "ヿ")
+    latin = sum(1 for ch in text if "a" <= ch.lower() <= "z")
+    if cjk == 0:
+        return "en"
+    return "zh" if cjk / max(cjk + latin, 1) >= 0.20 else "en"
+
+
 def build_user_message(user_query: str, image_path: Optional[str] = None) -> dict:
     """构建发给 LLM 的用户消息
 
@@ -801,9 +816,20 @@ def react_loop(
     if answer_mode:
         messages.append({"role": "system", "content": (
             "【追问回答模式】这是一次针对已有调查结论的追问。若该问题能**基于上文已取证的证据/结论**"
-            "直接回答，就用自然、对话式的中文文字**直接回答**，不必重新调查、也不必再套裁定标签或调用 "
-            "submit_verdict。仅当确实需要新的外部事实（上文没有）时才调用检索工具。"
+            "直接回答，就用自然、对话式的文字**直接回答**（语言跟随用户输入），不必重新调查、也不必再套裁定"
+            "标签或调用 submit_verdict。仅当确实需要新的外部事实（上文没有）时才调用检索工具。"
             "无论如何都不要凭记忆或常识编造未经查证的新结论。"
+        )})
+
+    # 输出语言：跟随用户输入、默认英文——用一条高优先级 system 指令强制，
+    # 避免被中文系统提示 / stage prompt 带偏（埋在 react_system 里的规则不够强）。
+    if _detect_output_language(user_query) == "en":
+        messages.append({"role": "system", "content": (
+            "OUTPUT LANGUAGE — CRITICAL: The user's input is in English, so write your ENTIRE "
+            "user-facing response in English — every [Verdict] / [Fact] / [RedFlag] / "
+            "[NeedUserConfirm] line, all summaries, section headings and the final checklist. "
+            "Do NOT reply in Chinese. Keep the bracketed tag names ([Verdict], [Fact], …) "
+            "in their English form."
         )})
 
     user_msg = build_user_message(user_query, image_path)

@@ -1056,7 +1056,9 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
     verdictVerb = parsed.verdictLabel === prevVerdict ? "Verdict holds" : "Verdict updated to";
   }
 
-  const fallback = firstSentences(parsed.rawText, 2);
+  // Non-verdict answers (e.g. Stage 2 resume analysis) have no structured card —
+  // show the FULL text here (rendered markdown), not a 2-sentence teaser that cuts off.
+  const fallback = parsed.rawText;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
