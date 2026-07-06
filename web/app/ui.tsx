@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ─── Backend base URL ───────────────────────────────────────────────────────────
 // In production the browser talks to the FastAPI backend directly — set
@@ -105,7 +107,8 @@ export type FormData = { [field: string]: string };
 
 // Parsed structured answer from LLM output
 export type ParsedAnswer = {
-  verdictLabel: string;  // e.g. "靠谱"
+  verdictLabel: string;  // canonical key for VERDICT_STYLES, e.g. "靠谱"
+  verdictRaw: string;    // label exactly as the model wrote it (e.g. "Likely a Scam") — for the subtitle
   verdictReason: string; // text after " — " on the verdict line
   facts: { text: string; confidence: string; url?: string }[];
   redFlags: { text: string }[];
@@ -291,12 +294,13 @@ export function extractURLs(text: string): { url: string; domain: string; contex
 }
 
 export function parseStructuredAnswer(text: string): ParsedAnswer {
-  if (!text) return { verdictLabel: "", verdictReason: "", facts: [], redFlags: [], sources: [], rawText: "" };
+  if (!text) return { verdictLabel: "", verdictRaw: "", verdictReason: "", facts: [], redFlags: [], sources: [], rawText: "" };
 
   const lines = text.split(/\r?\n/);
   const facts: ParsedAnswer["facts"] = [];
   const redFlags: ParsedAnswer["redFlags"] = [];
   let verdictLabel = "";
+  let verdictRaw = "";
   let verdictReason = "";
 
   for (const rawLine of lines) {
@@ -313,11 +317,13 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
         const matched = knownVerdicts.find(v => candidate.includes(v));
         // 英文裁定标签（如 "Likely a Scam"）经 detectVerdict 归一到中文 canonical key，
         // 使 VERDICT_STYLES 样式查找始终命中（否则英文输出时裁定卡失去配色/徽章）。
-        verdictLabel = matched ?? detectVerdict(candidate) ?? candidate.replace(/^(裁定|verdict|判断)[：:]\s*/i, "").trim();
+        verdictRaw = candidate.replace(/^(裁定|verdict|判断)[：:]\s*/i, "").trim();
+        verdictLabel = matched ?? detectVerdict(candidate) ?? verdictRaw;
         verdictReason = rest;
       } else {
         const matched = knownVerdicts.find(v => content.includes(v));
-        verdictLabel = matched ?? detectVerdict(content) ?? content;
+        verdictRaw = content.replace(/^(裁定|verdict|判断)[：:]\s*/i, "").trim();
+        verdictLabel = matched ?? detectVerdict(content) ?? verdictRaw;
         verdictReason = "";
       }
     } else if (line.startsWith("[Fact]")) {
@@ -355,7 +361,7 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
     }
   }
 
-  return { verdictLabel, verdictReason, facts, redFlags, sources, rawText: text };
+  return { verdictLabel, verdictRaw, verdictReason, facts, redFlags, sources, rawText: text };
 }
 
 // Prefer engine-provided structured sources over regex-extracted ones (problem 5).
@@ -691,6 +697,31 @@ export function Cite({ n, source, onJump }: { n: number; source?: SourceItem; on
   );
 }
 
+// Render LLM markdown (headings / bold / lists / tables) with compact, inline-styled
+// elements. Color is inherited from the parent so callers control it.
+export function Markdown({ children }: { children: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: (p) => <div style={{ fontSize: 15, fontWeight: 800, margin: "12px 0 6px" }} {...p} />,
+        h2: (p) => <div style={{ fontSize: 14, fontWeight: 800, margin: "12px 0 5px" }} {...p} />,
+        h3: (p) => <div style={{ fontSize: 13.5, fontWeight: 700, margin: "10px 0 4px" }} {...p} />,
+        p: (p) => <p style={{ margin: "5px 0" }} {...p} />,
+        ul: (p) => <ul style={{ margin: "5px 0", paddingLeft: 18 }} {...p} />,
+        ol: (p) => <ol style={{ margin: "5px 0", paddingLeft: 18 }} {...p} />,
+        li: (p) => <li style={{ margin: "2px 0" }} {...p} />,
+        strong: (p) => <strong style={{ fontWeight: 700 }} {...p} />,
+        a: (p) => <a target="_blank" rel="noopener noreferrer" style={{ color: "oklch(45% 0.13 250)" }} {...p} />,
+        code: (p) => <code style={{ background: "oklch(95% 0.01 70)", padding: "1px 4px", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: "0.92em" }} {...p} />,
+        hr: () => <div style={{ height: 1, background: "oklch(90% 0.012 70)", margin: "12px 0" }} />,
+      }}
+    >
+      {children}
+    </ReactMarkdown>
+  );
+}
+
 export function StructuredResult({ parsed, isFollowup = false, anchorBase }: {
   parsed: ParsedAnswer; isFollowup?: boolean; anchorBase?: string;
 }) {
@@ -712,13 +743,15 @@ export function StructuredResult({ parsed, isFollowup = false, anchorBase }: {
               color: "white", padding: "7px 16px", borderRadius: 999, fontSize: 15, fontWeight: 800 }}>
               {vs.en}
             </span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: vs.fg,
-              opacity: 0.7 }}>{verdict}</span>
+            {parsed.verdictRaw && parsed.verdictRaw !== vs.en && (
+              <span style={{ fontSize: 12, fontWeight: 700, color: vs.fg,
+                opacity: 0.7 }}>{parsed.verdictRaw}</span>
+            )}
           </div>
           {parsed.verdictReason && (
             <div style={{ marginTop: 12, fontSize: 14, lineHeight: 1.7, color: vs.fg,
               wordBreak: "break-word" }}>
-              {parsed.verdictReason}
+              <Markdown>{parsed.verdictReason}</Markdown>
             </div>
           )}
         </div>
@@ -731,8 +764,8 @@ export function StructuredResult({ parsed, isFollowup = false, anchorBase }: {
               {isFollowup ? "Follow-up Result" : "Investigation Result"}
             </div>
             <div style={{ fontSize: 13.5, lineHeight: 1.7, color: "oklch(28% 0.02 50)",
-              whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 500, overflowY: "auto" }}>
-              {parsed.rawText}
+              wordBreak: "break-word", maxHeight: 500, overflowY: "auto" }}>
+              <Markdown>{parsed.rawText}</Markdown>
             </div>
           </div>
         )
@@ -1043,16 +1076,16 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
           </span>
         </div>
       ) : (
-        <div style={{ lineHeight: 1.6 }}>{fallback || "Investigation complete — see the Evidence Board."}</div>
+        <div style={{ lineHeight: 1.6 }}>{fallback ? <Markdown>{fallback}</Markdown> : "Investigation complete — see the Evidence Board."}</div>
       )}
 
       {/* User-facing summary (engine-provided, grounded). Falls back to the verdict
           reason only when no summary was produced (older / free-text answers). */}
       {summaryForUser ? (
-        <div style={{ lineHeight: 1.65, color: "oklch(32% 0.02 50)" }}>{summaryForUser}</div>
+        <div style={{ lineHeight: 1.65, color: "oklch(32% 0.02 50)" }}><Markdown>{summaryForUser}</Markdown></div>
       ) : (
         parsed.verdictLabel && parsed.verdictReason && (
-          <div style={{ lineHeight: 1.65, color: "oklch(32% 0.02 50)" }}>{parsed.verdictReason}</div>
+          <div style={{ lineHeight: 1.65, color: "oklch(32% 0.02 50)" }}><Markdown>{parsed.verdictReason}</Markdown></div>
         )
       )}
 

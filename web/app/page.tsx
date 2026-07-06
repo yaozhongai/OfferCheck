@@ -9,7 +9,7 @@ import {
   parseStructuredAnswer, buildFollowupInput, buildInput, valid, summary, inputStyle,
   buildCrossStageContext, completedEarlierStages, ConvTurn,
   InlineTrace, ChatSummary, StructuredResult, StageForm,
-  apiUrl, DEMO_FORMS,
+  apiUrl, DEMO_FORMS, STAGE_FIELDS,
 } from "./ui";
 
 // ─── Main page ────────────────────────────────────────────────────────────────
@@ -472,8 +472,16 @@ export default function Home() {
       : summary(stage, forms);
 
     // Derive a case name from the opportunity if it's still a placeholder.
+    // Prefer the company; otherwise use the first line of this stage's primary
+    // field (JD / recruiter message / offer) so non-Research stages get a title too.
+    const firstLine = (s: string) => {
+      const t = s.trim().split(/\r?\n/)[0].trim();
+      return t.length > 44 ? t.slice(0, 44) + "…" : t;
+    };
+    const primaryKey = STAGE_FIELDS[stage]?.[0]?.key;
+    const primaryVal = primaryKey ? (forms[primaryKey] ?? "").trim() : "";
     const derivedName = forms.company?.trim()
-      || (rawMode ? (rawInput.trim().length > 40 ? rawInput.trim().slice(0, 40) + "…" : rawInput.trim()) : "");
+      || (rawMode ? firstLine(rawInput) : (primaryVal ? firstLine(primaryVal) : ""));
 
     const img = attachedImage;
     flushSync(() => {

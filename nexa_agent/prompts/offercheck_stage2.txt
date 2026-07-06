@@ -23,24 +23,28 @@
 ### 输出格式与结束方式
 
 **本阶段以文本方式结束**（不调用 submit_verdict、不用 [Verdict] 裁定标签）。当你分析完成、
-不再需要任何工具时，直接输出下面这份清单即视为结束：
+不再需要任何工具时，直接输出下面这份清单即视为结束。
+
+**用标准 Markdown 输出**（`##` 小标题、`**加粗**`、`-` / `1.` 列表）。**小标题与正文一律按输出
+语言给**（英文输入→英文，中文输入→中文，见系统提示「输出语言」规则）。下面用英文示例：
 
 ```
-【匹配概览】<一句话：整体契合度 + 最需要补强的方向>
+## Match Overview
+<one line: overall fit + the single most important area to strengthen>
 
-【TOP 3 高优先级改动】
-1. 突出/补充 <什么> —— 依据：JD 提到「<JD 原句片段>」，而你的简历<现状>
+## Top 3 Priority Edits
+1. Emphasize/add <what> — because the JD says "<JD snippet>" while your resume <current state>
 2. …
 3. …
 
-【完整修改清单（按优先级）】
-- [高] <要突出什么 / 要补什么> —— 依据：<关联到 JD 的哪句>
-- [中] …
-- [低] …
+## Full Edit Checklist (by priority)
+- **[High]** <what to emphasize / add> — because: <which JD line>
+- **[Medium]** …
+- **[Low]** …
 
-【ATS 关键词覆盖】
-已命中：<关键词, …>
-缺失（如你确实具备再补）：<关键词, …>
+## ATS Keyword Coverage
+Hit: <keywords, …>
+Missing (only add if you genuinely have it): <keywords, …>
 ```
 
 清单要具体、可执行（避免「优化措辞」这类空话），每条都能让用户明确知道**改哪里、怎么改、为什么**。
