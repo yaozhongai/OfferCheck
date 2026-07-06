@@ -17,7 +17,9 @@ pydantic>=2.7.0
 
 # LLM SDKs（核心引擎经 OpenAI 兼容 SDK 接入任意 provider：GMI / DeepSeek / ...）
 openai>=1.0.0          # OpenAI-compatible：GMI Cloud / DeepSeek / Kimi / 本地 VLM
-zai-sdk>=1.0.0         # GLM（server/llm 多 provider 客户端可选）
+# GLM（智谱）provider 可选，client.py 惰性 import；仅在用 ZHIPU_API_KEY 走 glm-5.1 时需要。
+# zai-sdk 目前最高仅 0.2.x（无 1.0），如需启用改用下一行：
+# zai-sdk>=0.2.0       # GLM（server/llm 多 provider 客户端可选）
 
 # HTTP（工具层 web_search / web_fetch / whois RDAP）
 requests>=2.28.0
