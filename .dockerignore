@@ -1,0 +1,29 @@
+# 构建上下文瘦身 —— 这些都不该进镜像
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+.venv
+venv
+*.egg-info
+
+# 前端本地产物（镜像内在 web 阶段重新构建）
+web/node_modules
+web/.next
+web/out
+
+# 运行时 / 内部产物
+logs
+data
+uploads
+*.db
+.env
+.env.*
+searxng
+scripts
+docs
+tests
+skills
+assets
+README.md
+SPEC.md

@@ -130,6 +130,21 @@ async def reset():
 
 
 # ---------------------------------------------------------------------------
+# 静态前端托管（生产：Docker 多阶段构建把 web/ 导出到 web/out，与后端同源）
+# 必须在所有 API 路由声明之后挂载——挂到 "/" 会兜底其余路径（静态资源 + index.html）。
+# ---------------------------------------------------------------------------
+
+_web_out = os.path.join(_project_root, "web", "out")
+if os.path.isdir(_web_out):
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=_web_out, html=True), name="web")
+    logger.info("静态前端已挂载: %s", _web_out)
+else:
+    logger.info("未找到 %s，跳过静态前端挂载（本地开发由 Next dev 提供）", _web_out)
+
+
+# ---------------------------------------------------------------------------
 # 直接启动
 # ---------------------------------------------------------------------------
 
