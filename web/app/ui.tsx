@@ -557,7 +557,8 @@ export function MetaEvents({ items }: { items: TraceItem[] }) {
       </div>
       {open && (
         <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4, marginLeft: 12,
-          borderLeft: "2px solid oklch(92% 0.01 70)", paddingLeft: 12 }}>
+          borderLeft: "2px solid oklch(92% 0.01 70)", paddingLeft: 12,
+          maxHeight: 240, overflowY: "auto" }}>
           {items.map((m, i) => (
             <div key={i} style={{ fontSize: 11, fontFamily: "var(--font-mono)",
               color: m.type === "warn" ? "oklch(50% 0.13 80)" : "oklch(48% 0.02 50)", padding: "2px 0" }}>

@@ -723,7 +723,9 @@ export default function Home() {
         </div>
 
         {/* Messages */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px",
+        {/* minHeight:0 是关键——flex 子项默认 min-height:auto 会被内容撑高、
+            使 overflowY:auto 失效（尤其调查结束展开长 trace 时无法滚动）。 */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "16px 18px",
           display: "flex", flexDirection: "column", gap: 10 }}>
 
           {/* Hero pitch — only on a brand-new case */}
