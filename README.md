@@ -1,14 +1,19 @@
-# OfferCheck
+# OfferCheck — Job Offer Due-Diligence Agent
 
-> 求职者的「怀疑型研究管家」：粘贴一份 offer / JD / 公司名 / 招聘方消息 / 截图，它主动联网**独立调查这次具体机会**，输出裁定「靠谱 / 存疑 / 大概率有坑」+ 红旗证据链 + 待你自行确认的事项。
+> A skeptical research copilot for job seekers. Paste an offer, JD, company name, recruiter message, or screenshot — it independently investigates that **specific opportunity** on the live web and returns a verdict of **Looks Legit / Suspicious / Likely a Scam**, with a source-verified evidence chain and items for you to confirm yourself.
 
-OfferCheck 覆盖求职全链路四阶段——**同一个自主调查引擎被投喂不同输入，不是四个独立按钮**。差异化内核：竞品最多做「公司实体静态信用打分」，OfferCheck 做**这次具体机会本身**的主动、多源、持续证伪，直击「冒名顶替真公司」这一最高频诈骗模式（伪造 offer / 仿冒域名邮箱 / 冒充 HR）。  
+**Live demo**: https://offercheck.up.railway.app/ — try: *“I received an offer from apple-hiring-team.com asking for a $200 gift-card background-check fee — is this legit?”*
 
-产品架构图如下
+- **Actively falsifies, not statically scores** — targets the highest-frequency scam pattern: impersonation of real companies (forged offers, lookalike domains, fake HR). Competitors return a static company credit score; OfferCheck investigates *this* opportunity, multi-source, and links every conclusion to sources it actually retrieved.
+- **No evidence, no verdict** — a four-layer grounding stack (grounding rules → mandatory-evidence gate → structured `submit_verdict` → source-attribution audit) blocks hallucinated verdicts by design.
+- **One engine, full journey** — role research → resume fit → recruiter-message check → offer verification run on a single autonomous investigation engine (per-stage prompts), with cross-stage memory carry-over and in-conversation capability routing.
+- **Powered by GMI Cloud** — DeepSeek-V4 Pro/Flash with layered thinking control, Kimi-K2 tool-call fallback, Gemini 3.1 vision OCR — routed per role by a model router.
 
 <p align="center">
-  <img src="assets/architecture.svg" alt="OfferCheck 架构：多模态输入 → 四阶段（同一引擎，不同 stage prompt）→ 接地门控的 ReAct + Reflexion 调查循环 → 三态裁定 + 证据链" width="760">
+  <img src="assets/architecture.svg" alt="OfferCheck architecture: multimodal input → four stages (one engine, different stage prompts) → grounded ReAct + Reflexion investigation loop → three-state verdict with evidence" width="760">
 </p>
+
+*以下为中文详细文档 · Detailed docs in Chinese below*
 
 ---
 

@@ -102,19 +102,19 @@
 
   <!-- Verdict card (three-state output) -->
   <rect x="210" y="454" width="300" height="46" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ccc)" stroke-width="1.2"/>
-  <rect x="222" y="462" width="74" height="20" rx="10" fill="#16a34a"/>
-  <text x="259" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Reliable</text>
-  <rect x="302" y="462" width="86" height="20" rx="10" fill="#d97706"/>
-  <text x="345" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Suspicious</text>
-  <rect x="394" y="462" width="98" height="20" rx="10" fill="#dc2626"/>
-  <text x="443" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Likely Scam</text>
+  <rect x="218" y="462" width="84" height="20" rx="10" fill="#16a34a"/>
+  <text x="260" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Looks Legit</text>
+  <rect x="308" y="462" width="86" height="20" rx="10" fill="#d97706"/>
+  <text x="351" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Suspicious</text>
+  <rect x="400" y="462" width="102" height="20" rx="10" fill="#dc2626"/>
+  <text x="451" y="476" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Likely a Scam</text>
   <text x="360" y="495" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">+ evidence chain · red flags · items to confirm</text>
 
   <!-- Model Router (infra) -->
   <rect x="28" y="238" width="184" height="60" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ddd)" stroke-width="1.2"/>
   <text x="120" y="258" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text, #333)">Model Router</text>
-  <text x="120" y="273" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">GMI · non-thinking instruct</text>
-  <text x="120" y="286" text-anchor="middle" font-size="8.5" fill="var(--text-muted, #888)">Qwen3-235B · DeepSeek-V3.2 · Kimi-K2</text>
+  <text x="120" y="273" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">GMI · layered thinking control</text>
+  <text x="120" y="286" text-anchor="middle" font-size="8" fill="var(--text-muted, #888)">DeepSeek-V4 Pro/Flash · Kimi-K2 · Gemini 3.1</text>
   <line x1="212" y1="268" x2="240" y2="268" stroke="var(--text-muted, #aaa)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
   <text x="120" y="313" text-anchor="middle" font-size="8.5" fill="var(--text-muted, #aaa)">routes every LLM call</text>
 

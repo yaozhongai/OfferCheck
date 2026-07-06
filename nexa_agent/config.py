@@ -31,7 +31,7 @@ _PROVIDER_PRESETS = {
         "api_key": os.environ.get("GMI_API_KEY", ""),
         # DeepSeek-V4：用 extra_body={"enable_thinking": bool} 控制思考（实测 GMI 接受不报错）。
         # Flash 可被关闭思考→快而省，用于成本敏感的多步执行（react_main/反思/评估）；
-        # Pro 会忽略该参数仍思考，正好用于首步规划/verifier。统一走 thinking_extra_body()。
+        # Pro 会忽略该参数仍思考，用于首步规划/verifier。统一走 thinking_extra_body()。
         "strong_model": "deepseek-ai/DeepSeek-V4-Pro",
         "fast_model": "deepseek-ai/DeepSeek-V4-Flash",
     },
