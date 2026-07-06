@@ -311,11 +311,13 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
         const candidate = content.slice(0, sepMatch.index).trim();
         const rest = content.slice(sepMatch.index + sepMatch[0].length).trim();
         const matched = knownVerdicts.find(v => candidate.includes(v));
-        verdictLabel = matched ?? candidate.replace(/^(裁定|verdict|判断)[：:]\s*/i, "").trim();
+        // 英文裁定标签（如 "Likely a Scam"）经 detectVerdict 归一到中文 canonical key，
+        // 使 VERDICT_STYLES 样式查找始终命中（否则英文输出时裁定卡失去配色/徽章）。
+        verdictLabel = matched ?? detectVerdict(candidate) ?? candidate.replace(/^(裁定|verdict|判断)[：:]\s*/i, "").trim();
         verdictReason = rest;
       } else {
         const matched = knownVerdicts.find(v => content.includes(v));
-        verdictLabel = matched ?? content;
+        verdictLabel = matched ?? detectVerdict(content) ?? content;
         verdictReason = "";
       }
     } else if (line.startsWith("[Fact]")) {
