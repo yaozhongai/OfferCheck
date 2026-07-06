@@ -94,12 +94,29 @@ async def run_stage_stream(request: RunStageRequest) -> StreamingResponse:
         agent = _build_agent(request)
         t0 = time.time()
         try:
+            # followup 轻量 stage 路由：追问明显属于其他阶段能力时切换 stage prompt
+            # （关键词门零成本快筛 + fast 层 LLM 确认；失败安全回落当前 stage）
+            effective_stage = request.stage
+            if request.auto_route and request.stage:
+                from nexa_agent.stage_router import route_stage_for_followup
+                routed, reason = route_stage_for_followup(request.input, request.stage)
+                if routed:
+                    logger.info("stage 路由 %s → %s（%s）", request.stage, routed, reason)
+                    event_q.put({
+                        "type": "stage_routed",
+                        "from_stage": request.stage,
+                        "to_stage": routed,
+                        "reason": reason,
+                    })
+                    effective_stage = routed
+
             result = agent.execute(
                 task=request.input,
                 image_path=request.image_path,
                 verbose=False,
-                stage=request.stage,
+                stage=effective_stage,
                 on_event=lambda e: event_q.put(e),
+                answer_mode=bool(request.answer_mode),
             )
             event_q.put({
                 "type": "done",
@@ -108,6 +125,7 @@ async def run_stage_stream(request: RunStageRequest) -> StreamingResponse:
                 "trials_used": result.trials_used,
                 "reflections": result.reflections,
                 "latency_ms": round((time.time() - t0) * 1000),
+                "stage": effective_stage,
             })
         except Exception as exc:  # noqa: BLE001
             logger.error("run_stage/stream 引擎异常: %s", exc, exc_info=True)

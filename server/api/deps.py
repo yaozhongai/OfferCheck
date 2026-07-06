@@ -12,8 +12,6 @@ from server.config import AppConfig, get_config
 from server.memory.long_term import LongTermMemory
 from server.memory.short_term import ShortTermMemory
 from server.api.schemas import (  # noqa: F401   — re-export for route convenience
-    ChatRequest,
-    ChatResponse,
     ErrorResponse,
     HealthResponse,
     MemoryListResponse,

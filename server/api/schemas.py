@@ -32,38 +32,6 @@ class HealthResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 对话
-# ---------------------------------------------------------------------------
-
-class ChatRequest(BaseModel):
-    """对话请求"""
-    session_id: str = Field(..., min_length=1, max_length=128,
-                            description="会话 ID，用于上下文关联")
-    message: str = Field(..., min_length=1, max_length=10000,
-                         description="用户输入文本")
-    user_id: Optional[str] = Field(None, description="可选：用户 ID，用于 LTM 隔离")
-    image_path: Optional[str] = Field(None, description="可选：关联图片路径")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="附加元信息")
-
-
-class ChatResponse(BaseModel):
-    """对话响应 — 对齐 AgentState_Schema.md to_public_response"""
-    request_id: str = ""
-    session_id: str
-    response: str
-    status: str = "ok"
-    task_type: str = ""
-    confidence: Optional[float] = None
-    execution_path: List[str] = Field(default_factory=list)
-    llm_calls: int = 0
-    vlm_calls: int = 0
-    latency_ms: float = 0.0
-    state: str = Field("ok", description="兼容旧字段")
-    reflection: Optional[Dict[str, Any]] = Field(None, description="兼容旧字段")
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
 # OfferCheck 阶段执行（瘦调用 nexa_agent 核心）
 # ---------------------------------------------------------------------------
 
@@ -83,6 +51,12 @@ class RunStageRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="可选：用户 ID（LTM 隔离）")
     max_trials: Optional[int] = Field(None, ge=1, le=5, description="覆盖最大 Trial 数")
     max_steps: Optional[int] = Field(None, ge=1, le=32, description="覆盖每轮最大步数")
+    answer_mode: Optional[bool] = Field(
+        False, description="追问回答模式：允许基于已有结论对话式作答并逐 token 流式（用于 followup）"
+    )
+    auto_route: Optional[bool] = Field(
+        False, description="followup 轻量 stage 路由：追问明显属于其他阶段能力时自动切换 stage prompt（关键词门 + fast 层确认）"
+    )
 
 
 class RunStageResponse(BaseModel):

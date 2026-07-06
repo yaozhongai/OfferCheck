@@ -33,7 +33,7 @@ from server.api.deps import (
     get_short_term_memory,
     reset_all,
 )
-from server.api.routes import chat, memory, upload, trace, run_stage
+from server.api.routes import memory, upload, trace, run_stage
 from nexa_agent.logger import get_logger
 
 logger = get_logger("nexa_agent")
@@ -98,7 +98,6 @@ app.add_middleware(
 )
 
 # 注册路由
-app.include_router(chat.router)
 app.include_router(run_stage.router)
 app.include_router(upload.router)
 app.include_router(memory.router)
