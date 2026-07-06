@@ -21,7 +21,7 @@ if _project_root not in sys.path:
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.api.deps import (
@@ -34,6 +34,7 @@ from server.api.deps import (
     reset_all,
 )
 from server.api.routes import memory, upload, trace, run_stage
+from server.security import require_admin
 from nexa_agent.logger import get_logger
 
 logger = get_logger("nexa_agent")
@@ -88,11 +89,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS —— 同源部署下前端由 FastAPI 托管，无需凭证跨域。
+# allow_credentials 必须为 False，否则 allow_origins=["*"] 是无效组合（浏览器拒绝）。
+# 需要限定来源时用 ALLOWED_ORIGINS="https://a.com,https://b.com" 覆盖。
+_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "*").strip()
+_cors_origins = ["*"] if _allowed_origins_env == "*" else [
+    o.strip() for o in _allowed_origins_env.split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -121,9 +128,9 @@ async def health():
     )
 
 
-@app.post("/api/v0/reset", tags=["system"])
+@app.post("/api/v0/reset", tags=["system"], dependencies=[Depends(require_admin)])
 async def reset():
-    """重置所有全局状态（仅开发调试用）"""
+    """重置所有全局状态（破坏性，需 ADMIN_TOKEN；未配置该 token 则整体禁用）"""
     reset_all()
     logger.warning("全局状态已重置")
     return {"status": "reset"}

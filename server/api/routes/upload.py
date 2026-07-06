@@ -14,12 +14,13 @@ import time
 import hashlib
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 from server.api.deps import (
     UploadResponse, ImageAnalysisRequest, ImageAnalysisResponse,
     get_config,
 )
+from server.security import enforce_upload_quota, UPLOAD_MAX_BYTES
 from server.persistence.database import get_session, init_db
 from server.persistence.models import ImageAnalysisCache
 from nexa_agent.logger import get_logger
@@ -30,7 +31,7 @@ router = APIRouter(prefix="/api/v0", tags=["upload"])
 
 # 允许的图片类型
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".pdf"}
-MAX_FILE_SIZE = 200 * 1024 * 1024  # 200MB
+MAX_FILE_SIZE = UPLOAD_MAX_BYTES  # 默认 10MB（server.security，可经 ABUSE_UPLOAD_MAX_MB 调整）
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -70,10 +71,12 @@ def _cache_to_response(row: ImageAnalysisCache, cached: bool) -> ImageAnalysisRe
     description="上传发票/票据图片，返回服务器端路径。支持 JPG/PNG/PDF。",
 )
 async def upload_file(
+    http_request: Request,
     file: UploadFile = File(..., description="图片文件"),
     session_id: str = Form("", description="关联的会话ID（可选）"),
 ) -> UploadResponse:
     """上传文件到服务器本地存储"""
+    enforce_upload_quota(http_request)
     config = get_config()
 
     # 校验扩展名
@@ -94,10 +97,10 @@ async def upload_file(
 
     dest_path = os.path.join(upload_dir, safe_name)
 
-    # 写入
-    content = await file.read()
+    # 有界读取：最多读 限额+1 字节，避免超大文件把整块塞进内存（内存 DoS）
+    content = await file.read(MAX_FILE_SIZE + 1)
     if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail=f"文件大小超过限制 ({MAX_FILE_SIZE // 1024 // 1024}MB)")
+        raise HTTPException(status_code=413, detail=f"文件大小超过限制 ({MAX_FILE_SIZE // 1024 // 1024}MB)")
     file_sha256 = _sha256_bytes(content)
 
     with open(dest_path, "wb") as f:

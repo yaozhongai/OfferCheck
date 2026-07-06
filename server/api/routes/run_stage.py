@@ -18,10 +18,14 @@ import queue
 import threading
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from server.api.schemas import RunStageRequest, RunStageResponse
+from server.api.deps import get_config
+from server.security import (
+    enforce_run_quota, validate_image_path, clamp_run_limits, RUN_CONCURRENCY,
+)
 from nexa_agent.logger import get_logger
 
 logger = get_logger("api_run_stage")
@@ -33,8 +37,8 @@ def _build_agent(request: RunStageRequest):
     from nexa_agent.reflexion_agent import ReflexionReActAgent
     from nexa_agent.config import REFLEXION_CONFIG, REACT_CONFIG
 
-    max_trials = request.max_trials or REFLEXION_CONFIG["max_trials"]
-    max_steps = request.max_steps or REACT_CONFIG["max_steps"]
+    # 服务端强制上限（忽略客户端传入的超大值，防放大 GMI 花费）
+    max_steps, max_trials = clamp_run_limits(request.max_steps, request.max_trials)
     agent = ReflexionReActAgent(
         max_trials=max_trials,
         max_memory_size=REFLEXION_CONFIG["max_memory_size"],
@@ -47,19 +51,26 @@ def _build_agent(request: RunStageRequest):
 
 @router.post("/run_stage", response_model=RunStageResponse,
              summary="执行 OfferCheck 阶段（瘦调用核心引擎，非流式）")
-def run_stage(request: RunStageRequest) -> RunStageResponse:
+def run_stage(request: RunStageRequest, http_request: Request) -> RunStageResponse:
     """瘦转发到 nexa_agent 核心 ReflexionReActAgent.execute()（阻塞返回）。"""
+    enforce_run_quota(http_request)
+    image_path = validate_image_path(request.image_path, get_config().project_root)
+    if not RUN_CONCURRENCY.try_acquire():
+        raise HTTPException(status_code=429, detail="并发调查数已达上限，请稍后再试")
     logger.info("run_stage 请求 stage=%s input_len=%d", request.stage, len(request.input))
 
-    agent = _build_agent(request)
-    t0 = time.time()
-    result = agent.execute(
-        task=request.input,
-        image_path=request.image_path,
-        verbose=False,
-        stage=request.stage,
-    )
-    latency_ms = (time.time() - t0) * 1000
+    try:
+        agent = _build_agent(request)
+        t0 = time.time()
+        result = agent.execute(
+            task=request.input,
+            image_path=image_path,
+            verbose=False,
+            stage=request.stage,
+        )
+        latency_ms = (time.time() - t0) * 1000
+    finally:
+        RUN_CONCURRENCY.release()
 
     logger.info("run_stage 完成 stage=%s success=%s trials=%d latency=%.0fms",
                 request.stage, result.success, result.trials_used, latency_ms)
@@ -76,7 +87,7 @@ def run_stage(request: RunStageRequest) -> RunStageResponse:
 
 
 @router.post("/run_stage/stream", summary="执行 OfferCheck 阶段（SSE 实时 trace 流）")
-async def run_stage_stream(request: RunStageRequest) -> StreamingResponse:
+async def run_stage_stream(request: RunStageRequest, http_request: Request) -> StreamingResponse:
     """SSE 流式执行：引擎在后台线程跑，on_event 事件经线程安全队列实时推给前端。
 
     事件类型（data 行 JSON 的 type 字段）：
@@ -84,6 +95,10 @@ async def run_stage_stream(request: RunStageRequest) -> StreamingResponse:
       verifier_start / verifier_result / trial_evaluated / final_answer /
       done（终止，携带最终裁定）/ error（异常）
     """
+    enforce_run_quota(http_request)
+    image_path = validate_image_path(request.image_path, get_config().project_root)
+    if not RUN_CONCURRENCY.try_acquire():
+        raise HTTPException(status_code=429, detail="并发调查数已达上限，请稍后再试")
     logger.info("run_stage/stream 请求 stage=%s input_len=%d",
                 request.stage, len(request.input))
 
@@ -112,7 +127,7 @@ async def run_stage_stream(request: RunStageRequest) -> StreamingResponse:
 
             result = agent.execute(
                 task=request.input,
-                image_path=request.image_path,
+                image_path=image_path,
                 verbose=False,
                 stage=effective_stage,
                 on_event=lambda e: event_q.put(e),
@@ -131,6 +146,7 @@ async def run_stage_stream(request: RunStageRequest) -> StreamingResponse:
             logger.error("run_stage/stream 引擎异常: %s", exc, exc_info=True)
             event_q.put({"type": "error", "message": str(exc)[:500]})
         finally:
+            RUN_CONCURRENCY.release()
             event_q.put(_SENTINEL)
 
     async def _event_stream():

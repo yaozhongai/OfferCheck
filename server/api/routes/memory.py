@@ -8,13 +8,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from server.api.deps import MemoryListResponse, get_long_term_memory, get_short_term_memory
+from server.security import require_admin
 from nexa_agent.logger import get_logger
 
 logger = get_logger("api_memory")
-router = APIRouter(prefix="/api/v0/memory", tags=["memory"])
+# 记忆读/写/删均可泄露或破坏数据，且当前前端不经此路由 —— 整体锁在 ADMIN_TOKEN 后。
+router = APIRouter(prefix="/api/v0/memory", tags=["memory"], dependencies=[Depends(require_admin)])
 
 
 # ── 会话记忆 ──
