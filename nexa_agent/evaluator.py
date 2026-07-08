@@ -28,7 +28,9 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger
-from nexa_agent.config import get_model_for_role, MODEL_CONFIG, SUPPORTS_THINKING_PARAM
+from nexa_agent.config import get_model_for_role, MODEL_CONFIG, thinking_extra_body
+from nexa_agent.util.json_extract import extract_json_block, repair_truncated_json
+from nexa_agent.util.llm_retry import call_with_retry
 
 logger = get_logger("evaluator")
 
@@ -60,14 +62,6 @@ class EvalResult:
 # ==========================================================================
 # 启发式失败规则
 # ==========================================================================
-
-# 不确定性标志短语
-UNCERTAINTY_PHRASES = [
-    "我不确定", "我不太确定", "我无法确定", "可能", "也许",
-    "I'm not sure", "I am not sure", "uncertain",
-    "无法回答", "没有足够信息", "信息不足",
-]
-
 
 def _detect_context_overflow(trajectory: str) -> Optional[dict]:
     """检测是否达到最大步数但未给出有效答案"""
@@ -138,18 +132,6 @@ def _detect_tool_errors(trajectory: str) -> Optional[dict]:
     return None
 
 
-def _detect_uncertainty(answer: str) -> Optional[dict]:
-    """检测答案中是否有不确定性标志"""
-    for phrase in UNCERTAINTY_PHRASES:
-        if phrase.lower() in answer.lower():
-            return {
-                "failure_mode": "wrong_reasoning",
-                "reason": f"答案包含不确定性标志: '{phrase}'",
-                "severity": "low",
-            }
-    return None
-
-
 def _detect_tool_gap(trajectory: str) -> Optional[dict]:
     """检测工具能力缺口：Agent 反复尝试读取同一资源但无法获取有效内容
 
@@ -204,12 +186,14 @@ def _detect_tool_gap(trajectory: str) -> Optional[dict]:
 
 
 # 启发式规则列表（按优先级排序）
+# 注：已移除 wrong_reasoning/_detect_uncertainty 规则（评审 1.4）——它把「可能/也许/
+# 信息不足」等表述判为失败，与 SPEC §1.3「宁可存疑，不可自信编造」的产品教义冲突，
+# 且中文高频误报。答案是否充分改由 LLM judge 评估（stage-aware），不再靠关键词枪毙。
 HEURISTIC_RULES = [
     ("context_overflow", _detect_context_overflow),
     ("tool_gap", _detect_tool_gap),
     ("loop", _detect_repeated_actions),
     ("tool_misuse", _detect_tool_errors),
-    ("wrong_reasoning", _detect_uncertainty),
 ]
 
 
@@ -334,11 +318,10 @@ class Evaluator:
         self, trajectory: str, answer: str, terminated_reason: str,
     ) -> EvalResult:
         """运行启发式规则，按优先级检测第一个失败信号"""
+        # 移除 wrong_reasoning 规则后（评审 1.4），剩余规则全部作用于 trajectory；
+        # 旧的分支曾把 tool_gap 误喂 answer（它其实需要 trajectory 里的 URL），一并修正。
         for rule_name, rule_func in HEURISTIC_RULES:
-            if rule_name == "context_overflow":
-                result = rule_func(trajectory)
-            else:
-                result = rule_func(trajectory if rule_name in ("loop", "tool_misuse") else answer)
+            result = rule_func(trajectory)
 
             if result:
                 return EvalResult(
@@ -420,11 +403,18 @@ class Evaluator:
 - 编造了从未检索过的来源（轨迹中没有对应工具调用）
 - 裁定与证据明显矛盾（如证据全部支持靠谱却裁定有坑，反之亦然）"""
         else:
-            criteria = """评估标准：
-1. 答案是否直接回应了用户的问题核心？
-2. 答案是否有实际内容支撑（而非空泛陈述）？
-3. 答案中是否存在明显的事实性错误或自相矛盾？
-4. 答案长度是否足够（一般应超过 20 个字符）？"""
+            criteria = """评估标准（通用事实/问答任务）——判 success=true 仅当 A–D **全部**满足，任一不满足即 false：
+A. 直接回应了用户问题的**核心诉求**（答非所问 / 只答了一部分 → false）
+B. 给出了**具体、可核查**的结论或数据（泛泛而谈、"需进一步分析/需查证"、只复述过程无结论 → false）
+C. 无明显事实错误或自相矛盾
+D. 结论有轨迹中的**实际证据/计算**支撑，而非凭空断言
+
+判定倾向：**宁严勿松**——拿不准是否充分时判 false，并在 feedback 里指出"缺了什么"。
+
+反例（应判 false，failure_mode=premature_answer）：
+  问「X 公司 2025 年融资多少」→ 答「该公司多轮获得融资，具体金额需进一步查证」（无具体结论）
+正例（应判 true）：
+  同问 → 答「2025-03 完成 B 轮 5000 万美元 [来源: reuters.com/...]」（具体、有据、可核查）"""
 
         return f"""你是一个严格的任务评估专家。请判断以下智能体的回答是否充分解决了用户的问题。
 
@@ -442,13 +432,17 @@ class Evaluator:
 
     def _parse_llm_eval_response(self, response: str) -> dict:
         """解析 LLM 评估的 JSON 响应"""
-        # 尝试提取 JSON 块
-        json_match = re.search(r"\{[^}]+\}", response, re.DOTALL)
-        if json_match:
+        # 用共享的健壮抽取（括号配对 + 截断修复），替代脆弱的 \{[^}]+\} 正则
+        # （评审 1.7：该正则遇嵌套即断）。抽不出/解析失败再走文本兜底。
+        block = extract_json_block(response)
+        if block:
             try:
-                return json.loads(json_match.group(0))
+                return json.loads(block)
             except json.JSONDecodeError:
-                pass
+                try:
+                    return json.loads(repair_truncated_json(block))
+                except json.JSONDecodeError:
+                    pass
 
         # 兜底：文本判断
         response_lower = response.lower()
@@ -578,11 +572,15 @@ class Evaluator:
             "stream": False,
         }
 
-        # DeepSeek thinking 关闭（仅官方 API 支持该私有参数；GMI 收到会 422）
-        if SUPPORTS_THINKING_PARAM and "deepseek" in self.model_name.lower():
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        # 关闭思考：统一走 thinking_extra_body（GMI=enable_thinking:false / DeepSeek 官方=
+        # thinking.disabled）。旧的 SUPPORTS_THINKING_PARAM 守卫在 GMI 下恒 False → 评估
+        # 调用没关思考，慢而贵（评审 1.2）。
+        _eb = thinking_extra_body(self.model_name, enable_thinking=False)
+        if _eb:
+            kwargs["extra_body"] = _eb
 
-        response = client.chat.completions.create(**kwargs)
+        # 瞬时错误重试（评审 1.9）：抖动时先自愈，避免 _llm_evaluate 静默回退启发式
+        response = call_with_retry(lambda: client.chat.completions.create(**kwargs))
         return response.choices[0].message.content or ""
 
 

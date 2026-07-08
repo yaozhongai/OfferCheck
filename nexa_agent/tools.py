@@ -35,6 +35,7 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger
+from nexa_agent.util.net_guard import reject_reason_if_unsafe
 
 logger = get_logger("react_tools")
 
@@ -395,6 +396,9 @@ def wikipedia_search(query: str) -> str:
 def _download_image_from_url(url: str) -> str:
     """下载 URL 图片到临时文件，返回本地路径。调用方负责清理。"""
     import tempfile
+    _ssrf = reject_reason_if_unsafe(url)  # 评审 2.4：拦截内网/云元数据端点
+    if _ssrf:
+        raise RuntimeError(_ssrf)
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -742,19 +746,33 @@ def analyze_image_cloud(param: str) -> str:
 # 网页内容提取（缓存到内存，save_content 负责落盘）
 # --------------------------------------------------------------------------
 
-# 会话级累积缓存：每次 tavily_extract 的结果追加到此列表
-_session_extracts: List[dict] = []
+# 会话级累积缓存：每次 tavily_extract 的结果追加到此列表。
+# 用 ContextVar 而非模块全局——server 每条调查跑在独立线程（run_stage 的
+# threading.Thread），线程不继承父 context，故各 run 天然拿到隔离的缓存，
+# 并发调查不再互相 clear/污染对方的提取（评审 1.6）。
+import contextvars as _contextvars
+
+_session_extracts_var: "_contextvars.ContextVar[Optional[List[dict]]]" = \
+    _contextvars.ContextVar("session_extracts", default=None)
+
+
+def _extracts() -> List[dict]:
+    """取当前 run 的 extract 列表（不存在则惰性初始化一个空列表并绑定）。"""
+    lst = _session_extracts_var.get()
+    if lst is None:
+        lst = []
+        _session_extracts_var.set(lst)
+    return lst
 
 
 def get_session_extracts() -> List[dict]:
     """返回本次会话所有 extract 结果（供策展步骤使用）"""
-    return _session_extracts
+    return _extracts()
 
 
 def clear_session_extracts() -> None:
-    """清空会话缓存（每次 Agent 运行前调用）"""
-    global _session_extracts
-    _session_extracts = []
+    """清空会话缓存（每次 Agent 运行前调用）——绑定一个新空列表到当前 context"""
+    _session_extracts_var.set([])
 
 
 @register(
@@ -802,7 +820,7 @@ def tavily_extract(url: str) -> str:
             return f"Tavily Extract: '{url}' 页面无正文内容。"
 
         # 追加到会话级缓存，不落盘
-        _session_extracts.append({
+        _extracts().append({
             "url": url, "title": title, "raw_content": raw_content,
         })
 
@@ -917,6 +935,12 @@ def web_fetch(url: str) -> str:
     if not _p.netloc or _p.netloc.startswith("file:"):
         return f"[错误] web_fetch: 无效 URL '{url[:100]}'。请提供标准的 http/https URL（如 https://example.com/page）。"
 
+    # SSRF 防护（评审 2.4）：拒绝解析到内网/环回/云元数据端点的 URL
+    _ssrf = reject_reason_if_unsafe(url)
+    if _ssrf:
+        logger.warning("web_fetch SSRF 拦截 url=%s", url[:120])
+        return _ssrf
+
     # 登录墙拦截：这些域名需要登录才能访问，Jina/trafilatura 均无法绕过
     if _is_login_wall(url):
         from urllib.parse import urlparse as _up
@@ -948,7 +972,7 @@ def web_fetch(url: str) -> str:
         content_preview = content
 
     # 追加到会话缓存
-    _session_extracts.append({
+    _extracts().append({
         "url": url, "title": url, "raw_content": content,
     })
 
@@ -1028,14 +1052,14 @@ def save_content(filename: str) -> str:
     if not filename:
         return "[错误] save_content: 文件名不能为空"
 
-    if not _session_extracts:
+    if not _extracts():
         return (
             "[错误] save_content: 没有可保存的内容。"
             "请先调用 tavily_extract(url) 提取网页内容后再保存。"
         )
 
     # 取最近一条 extract
-    extract = _session_extracts[-1]
+    extract = _extracts()[-1]
 
     try:
         filepath = write_extract_to_disk(extract, filename)
@@ -1343,6 +1367,10 @@ def read_pdf(param: str) -> str:
 
     try:
         if source.startswith("http://") or source.startswith("https://"):
+            _ssrf = reject_reason_if_unsafe(source)  # 评审 2.4
+            if _ssrf:
+                logger.warning("read_pdf SSRF 拦截 url=%s", source[:120])
+                return _ssrf
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1388,7 +1416,7 @@ def read_pdf(param: str) -> str:
 
         logger.info("read_pdf 提取完成 total_pages=%d chars=%d", total_pages, len(md_text))
 
-        _session_extracts.append({
+        _extracts().append({
             "url": source,
             "title": os.path.basename(source)[:80],
             "raw_content": md_text,
@@ -1445,6 +1473,10 @@ def read_xlsx(param: str) -> str:
 
     try:
         if source.startswith("http://") or source.startswith("https://"):
+            _ssrf = reject_reason_if_unsafe(source)  # 评审 2.4
+            if _ssrf:
+                logger.warning("read_xlsx SSRF 拦截 url=%s", source[:120])
+                return _ssrf
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

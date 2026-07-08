@@ -67,6 +67,7 @@ def run_stage(request: RunStageRequest, http_request: Request) -> RunStageRespon
             image_path=image_path,
             verbose=False,
             stage=request.stage,
+            output_lang=request.output_lang,
         )
         latency_ms = (time.time() - t0) * 1000
     finally:
@@ -132,6 +133,7 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
                 stage=effective_stage,
                 on_event=lambda e: event_q.put(e),
                 answer_mode=bool(request.answer_mode),
+                output_lang=request.output_lang,
             )
             event_q.put({
                 "type": "done",

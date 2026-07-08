@@ -29,89 +29,19 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger
-from nexa_agent.config import MODEL_CONFIG, SUPPORTS_THINKING_PARAM, thinking_extra_body, get_model_for_role
+from nexa_agent.config import MODEL_CONFIG, thinking_extra_body, get_model_for_role
+from nexa_agent.util.json_extract import extract_json_block, repair_truncated_json
+from nexa_agent.util.llm_retry import call_with_retry
 
 logger = get_logger("verifier")
 
 
 # ==========================================================================
-# JSON 提取 / 截断修复（Verifier CoVe 响应容错）
+# JSON 提取 / 截断修复：已抽到共享工具 nexa_agent.util.json_extract（评审 1.7）。
+# 保留模块内别名（下划线私有名）供本文件与既有引用继续使用，行为完全一致。
 # ==========================================================================
-
-def _extract_json_block(text: str) -> Optional[str]:
-    """从 LLM 响应里抠出最外层 JSON 对象。
-
-    容错 markdown 代码围栏（```json ... ```）与前后夹带的说明文字，
-    从第一个 `{` 起做括号配对（忽略字符串内的括号）取到匹配的 `}`。
-    截断（无匹配闭合）时返回从 `{` 到结尾的整段，交给修复函数补齐。
-    """
-    if not text:
-        return None
-    t = text.strip()
-    t = re.sub(r"^```(?:json)?\s*", "", t)
-    t = re.sub(r"\s*```$", "", t)
-    start = t.find("{")
-    if start < 0:
-        return None
-    depth = 0
-    in_str = False
-    esc = False
-    for i in range(start, len(t)):
-        ch = t[i]
-        if esc:
-            esc = False
-            continue
-        if ch == "\\" and in_str:
-            esc = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return t[start:i + 1]
-    # 未闭合 → 截断，返回整段供修复
-    return t[start:]
-
-
-def _repair_truncated_json(s: str) -> str:
-    """补齐被 max_tokens 截断的 JSON：闭合未结束的字符串与括号。
-
-    尽力而为——去掉尾部残缺 token 后，按栈补上缺失的 `]` / `}`。
-    修复后仍可能非法（如遗留尾逗号），由调用方 try/except 兜底。
-    """
-    stack: list[str] = []
-    in_str = False
-    esc = False
-    for ch in s:
-        if esc:
-            esc = False
-            continue
-        if ch == "\\" and in_str:
-            esc = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch in "{[":
-            stack.append(ch)
-        elif ch in "}]" and stack:
-            stack.pop()
-    repaired = s
-    if in_str:
-        repaired += '"'
-    # 去掉尾部残缺片段（截断在逗号/冒号/未完成键值处）
-    repaired = re.sub(r"[,:]\s*$", "", repaired.rstrip())
-    for opener in reversed(stack):
-        repaired += "}" if opener == "{" else "]"
-    return repaired
+_extract_json_block = extract_json_block
+_repair_truncated_json = repair_truncated_json
 
 
 # ==========================================================================
@@ -440,8 +370,14 @@ class VerifierAgent:
             result = self._parse_cove_response(response, facts)
             return result
         except Exception as exc:
-            logger.error("Verifier LLM 调用失败: %s，默认放行", exc)
-            return VerdictResult(status="unverified", reason=f"Verifier 异常，默认放行: {exc}")
+            # fail-safe（评审 1.9）：重试仍失败 → 不硬拦（避免核查服务宕机时全线阻塞），
+            # 但如实标注「核查服务不可用」而非「默认放行」，避免让上层误以为已核实通过。
+            logger.error("Verifier LLM 调用失败（重试后）: %s", exc)
+            return VerdictResult(
+                status="unverified",
+                reason=f"核查服务暂不可用（非「已核实」结论）: {str(exc)[:150]}",
+                feedback="事实核查未能执行，本次裁定未经独立核验，请谨慎采信。",
+            )
 
     def _call_llm(self, prompt: str) -> str:
         from openai import OpenAI
@@ -468,7 +404,8 @@ class VerifierAgent:
         if _eb:
             kwargs["extra_body"] = _eb
 
-        response = client.chat.completions.create(**kwargs)
+        # 瞬时错误重试（评审 1.9）：GMI 抖动时先自愈，避免直接落到 fail-open 兜底
+        response = call_with_retry(lambda: client.chat.completions.create(**kwargs))
         return response.choices[0].message.content or ""
 
     def _parse_response(self, text: str) -> VerdictResult:

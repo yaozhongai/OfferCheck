@@ -50,8 +50,9 @@ from nexa_agent.evaluator import Evaluator, EvalResult, create_evaluator
 from nexa_agent.verifier import VerifierAgent, should_trigger_verifier
 from nexa_agent.config import (
     REFLEXION_CONFIG, REACT_CONFIG, MEMORY_CONFIG, PATH_CONFIG,
-    SUPPORTS_THINKING_PARAM, thinking_extra_body, get_config_summary, get_model_for_role,
+    thinking_extra_body, get_config_summary, get_model_for_role,
 )
+from nexa_agent.util.llm_retry import call_with_retry
 
 logger = get_logger("reflexion_agent")
 
@@ -183,6 +184,7 @@ class ReflexionReActAgent:
         stage: Optional[str] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         answer_mode: bool = False,
+        output_lang: Optional[str] = None,
     ) -> ReflexionResult:
         """执行带反思的完整任务流程
 
@@ -282,6 +284,7 @@ class ReflexionReActAgent:
                 stage=stage,
                 on_event=on_event,
                 answer_mode=answer_mode,
+                output_lang=output_lang,
             )
 
             # 从轨迹中提取本轮访问过的 URL，累积到 visited_urls
@@ -557,7 +560,7 @@ class ReflexionReActAgent:
             kwargs["extra_body"] = _eb
 
         t0 = time.time()
-        response = client.chat.completions.create(**kwargs)
+        response = call_with_retry(lambda: client.chat.completions.create(**kwargs))  # 评审 1.9
         elapsed = (time.time() - t0) * 1000
 
         content = response.choices[0].message.content or ""
@@ -617,10 +620,11 @@ class ReflexionReActAgent:
                 "temperature": 0.1,
                 "stream": False,
             }
-            if SUPPORTS_THINKING_PARAM and "deepseek" in model.lower():
-                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            _eb = thinking_extra_body(model, enable_thinking=False)  # 评审 1.2
+            if _eb:
+                kwargs["extra_body"] = _eb
 
-            response = client.chat.completions.create(**kwargs)
+            response = call_with_retry(lambda: client.chat.completions.create(**kwargs))  # 评审 1.9
             content = response.choices[0].message.content or ""
 
             # 解析教训行
@@ -731,10 +735,11 @@ Agent 最终答案: {answer_snippet}
                 "temperature": 0.0,
                 "stream": False,
             }
-            if SUPPORTS_THINKING_PARAM and "deepseek" in model.lower():
-                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            _eb = thinking_extra_body(model, enable_thinking=False)  # 评审 1.2
+            if _eb:
+                kwargs["extra_body"] = _eb
 
-            response = client.chat.completions.create(**kwargs)
+            response = call_with_retry(lambda: client.chat.completions.create(**kwargs))  # 评审 1.9
             content = response.choices[0].message.content or ""
 
             if "无" in content and len(content) < 20:

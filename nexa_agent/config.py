@@ -89,8 +89,11 @@ MODEL_CONFIG = {
     "model": os.environ.get("LLM_MODEL", _PRESET["strong_model"]),
     "base_url": _PRESET["base_url"],
     "api_key": _PRESET["api_key"],
-    "react_temperature": 0.0,
-    "reflection_temperature": 0.3,
+    # ReAct 主循环采样温度（0=最确定，利于可复现取证）。env 可覆盖。
+    # 注：此前该键从未被读取，主循环实际跑在 provider 默认温度上——现已在
+    # call_llm / call_llm_with_tools / stream_llm_with_tools 显式传入（评审 1.1）。
+    "react_temperature": float(os.environ.get("REACT_TEMPERATURE", "0.0")),
+    # （已删 reflection_temperature：从未被读；反思实际用 REFLEXION_CONFIG 的同名键）
 }
 
 # ==========================================================================
@@ -122,8 +125,8 @@ MODEL_ROUTING = {
     "reflection":        "fast",     # 反思生成 — 结构化输出，复杂度低
     "evaluator_llm":     "fast",     # LLM 评估 — 判断逻辑简单
     "lesson_extract":    "fast",     # 教训提取 — 归纳总结
-    "evolver":           "strong",   # 规则演化 — 低频高要求
     "tool_call_upgrade": "upgrade",  # 备援 — 动态升级触发时使用
+    # （已删 evolver 路由：无对应实现，get_model_for_role("evolver") 从未被调用）
 }
 
 # 动态升级阈值：连续 N 步 LLM 未发 tool_calls（且无 Final Answer）后自动切 upgrade 层
@@ -167,7 +170,7 @@ VISION_CONFIG = {
 REACT_CONFIG = {
     "max_steps": int(os.environ.get("REACT_MAX_STEPS", "16")),
     "observation_max_chars": int(os.environ.get("REACT_OBS_MAX_CHARS", "2000")),
-    "compression_after_steps": int(os.environ.get("REACT_COMPRESS_AFTER", "5")),
+    # （已删 compression_after_steps：从未被引用；观察截断由 _truncate_observation 分档处理）
 }
 
 # ==========================================================================
@@ -257,7 +260,7 @@ def get_model_for_role(role: str) -> str:
 
     Args:
         role: 角色标识 — "react_first" | "react_main" | "reflection" |
-              "evaluator_llm" | "lesson_extract" | "evolver"
+              "evaluator_llm" | "lesson_extract" | "tool_call_upgrade"
 
     Returns:
         模型名称字符串

@@ -22,7 +22,8 @@ import json
 import re
 from typing import Optional
 
-from nexa_agent.config import MODEL_CONFIG, SUPPORTS_THINKING_PARAM, get_model_for_role
+from nexa_agent.config import MODEL_CONFIG, thinking_extra_body, get_model_for_role
+from nexa_agent.util.json_extract import extract_json_block
 from nexa_agent.logger import get_logger
 
 logger = get_logger("stage_router")
@@ -112,14 +113,17 @@ def _llm_confirm(question: str, current: str, candidates: set[str]) -> Optional[
             "max_tokens": 128,
             "temperature": 0.0,
         }
-        if SUPPORTS_THINKING_PARAM and "deepseek" in kwargs["model"].lower():
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        _eb = thinking_extra_body(kwargs["model"], enable_thinking=False)  # 评审 1.2
+        if _eb:
+            kwargs["extra_body"] = _eb
+        # 路由器保留 SDK 层 max_retries=1 + 失败即安全回落 keep（见 except），
+        # 不叠加重循环——它本就是「不确定就 keep」的快路径（评审 1.9 例外说明）。
         resp = client.chat.completions.create(**kwargs)
         text = resp.choices[0].message.content or ""
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if not m:
+        block = extract_json_block(text)  # 评审 1.7：健壮抽取替代 re.search
+        if not block:
             return None
-        data = json.loads(m.group(0))
+        data = json.loads(block)
         route = str(data.get("route", "keep")).strip()
         if route in candidates:
             logger.info("stage 路由确认 %s→%s：%s", current, route, data.get("why", ""))

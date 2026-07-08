@@ -57,6 +57,9 @@ class RunStageRequest(BaseModel):
     auto_route: Optional[bool] = Field(
         False, description="followup 轻量 stage 路由：追问明显属于其他阶段能力时自动切换 stage prompt（关键词门 + fast 层确认）"
     )
+    output_lang: Optional[str] = Field(
+        None, description="可选：显式输出语言 'en'|'zh'（评审 1.10）。指定则优先，避免内容检测阈值把混合语言判翻；未指定回退内容检测"
+    )
 
 
 class RunStageResponse(BaseModel):
