@@ -73,8 +73,10 @@ CLAUDE.md
 # ── 内部/开发产物：不进公开仓库 ──
 # 设计深潜/会议纪要/规划稿等内部文档
 docs/
-# 测试与用例（内部；含 API smoke test）
-tests/
+# 测试与用例：版本化纯单测（test_*.py，不含 key），仍忽略 API smoke（gmi_api_test.py）
+# 及 *_test.py 命名的用例。注意用 tests/* 而非 tests/——排除整个目录会阻止 ! 例外生效。
+tests/*
+!tests/test_*.py
 # dev-loop 自定义 skill 与工作区
 skills/
 
