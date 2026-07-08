@@ -357,7 +357,10 @@ class ReflexionReActAgent:
                         print(f"\n🔍 Verifier 介入: 事实核查中...")
                     _emit("verifier_start", trial=trial)
                     t_v = time.time()
-                    verdict = self.verifier.verify(answer=answer, task=task, stage=stage)
+                    verdict = self.verifier.verify(
+                        answer=answer, task=task, stage=stage,
+                        evidence=react_result.get("evidence_registry"),  # 评审 2.2：entailment 内容核实
+                    )
                     logger.info("Verifier trial=%d status=%s elapsed=%.1fs",
                                 trial, verdict.status, time.time() - t_v)
                     _emit("verifier_result", trial=trial, passed=verdict.passed,

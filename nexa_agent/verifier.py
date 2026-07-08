@@ -163,6 +163,37 @@ def parse_offer_verdict(answer: str) -> OfferVerdict:
         need_user_confirm=_parse_tag_list(answer, "NeedUserConfirm"),
     )
 
+
+# ── entailment 内容核查辅助（评审 2.2）──
+
+_URL_IN_TEXT = re.compile(r'https?://[^\s\)\]>,"\']+')
+_BARE_DOMAIN = re.compile(r'\b(?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,}\b', re.IGNORECASE)
+
+
+def _source_domain(source: str) -> str:
+    """从一条 [Source] 文本里提取域名（先找 URL，再找裸域名，都无则空）。"""
+    if not source:
+        return ""
+    m = _URL_IN_TEXT.search(source)
+    if m:
+        from urllib.parse import urlparse
+        return urlparse(m.group(0)).netloc.lower().removeprefix("www.")
+    m2 = _BARE_DOMAIN.search(source)
+    return m2.group(0).lower().removeprefix("www.") if m2 else ""
+
+
+def _match_evidence(source_domain: str, evidence: dict) -> str:
+    """按域名（含父/子域宽松匹配）取该来源检索到的正文摘录；无则空串。"""
+    if not source_domain or not evidence:
+        return ""
+    if source_domain in evidence:
+        return evidence[source_domain]
+    for dom, text in evidence.items():
+        if dom and (dom.endswith("." + source_domain) or source_domain.endswith("." + dom)):
+            return text
+    return ""
+
+
 def _parse_facts_from_output(answer: str) -> list[dict]:
     """从 Agent 输出中提取 [Fact]/[Source]/[Confidence] 三元组
 
@@ -244,13 +275,17 @@ class VerifierAgent:
 
     # ── 主入口 ──
 
-    def verify(self, answer: str, task: str, stage: Optional[str] = None) -> VerdictResult:
+    def verify(self, answer: str, task: str, stage: Optional[str] = None,
+               evidence: Optional[dict] = None) -> VerdictResult:
         """核查 Agent 输出的事实可靠性
 
         Args:
             answer: Agent 的完整 Final Answer（含数据溯源段落）
             task: 原始用户问题
             stage: 可选的场景阶段标识（如 "stage4"），用于 stage-aware 核查标准
+            evidence: 可选的「域名 → 该来源检索到的正文摘录」映射（评审 2.2）。
+                      有它时对「来源真实但内容不支持断言」（misattribution）做 entailment 核查——
+                      这是 AIS 存在性对账抓不到的幻觉形态。
 
         Returns:
             VerdictResult
@@ -270,8 +305,8 @@ class VerifierAgent:
         if quick_reject:
             return quick_reject
 
-        # Step 3: LLM 深度评估（仅对需要的事实）
-        return self._llm_verify(facts, task, stage=stage)
+        # Step 3: LLM 深度评估（来源可信度 + 可选的 entailment 内容核实）
+        return self._llm_verify(facts, task, stage=stage, evidence=evidence)
 
     # ── 快捷规则 ──
 
@@ -300,16 +335,23 @@ class VerifierAgent:
     # ── LLM 深度评估 ──
 
     def _llm_verify(self, facts: list[dict], task: str,
-                    stage: Optional[str] = None) -> VerdictResult:
-        """用 LLM 评估来源可信度"""
-        # 构建精简的核查 prompt（只传事实，不传轨迹）
+                    stage: Optional[str] = None,
+                    evidence: Optional[dict] = None) -> VerdictResult:
+        """用 LLM 评估来源可信度 + （有 evidence 时）内容 entailment 核查"""
+        # 构建精简的核查 prompt。有检索正文摘录的事实附上摘录，供判断「内容是否支持断言」。
         facts_text = ""
+        entailment_idxs: list[int] = []  # 附了正文摘录、需判 supported 的事实序号
         for i, f in enumerate(facts, 1):
             facts_text += (
                 f"[{i}] 事实: {f['fact'][:200]}\n"
                 f"    来源: {f['source'][:300]}\n"
-                f"    自评: {f['confidence']}\n\n"
+                f"    自评: {f['confidence']}\n"
             )
+            excerpt = _match_evidence(_source_domain(f.get("source", "")), evidence or {})
+            if excerpt:
+                entailment_idxs.append(i)
+                facts_text += f"    已检索到该来源的正文摘录（用于核对断言是否属实）: {excerpt[:700]}\n"
+            facts_text += "\n"
 
         if stage and ("stage4" in stage or "stage3" in stage):
             source_criteria = """来源可信度判断标准（OfferCheck offer/沟通 证伪专用）:
@@ -343,7 +385,17 @@ class VerifierAgent:
 
 如果存在多个可靠来源交叉验证同一数据，即使其中有一个不可靠来源也应通过。"""
 
-        prompt = f"""你是严格的事实核查员。请对每条事实**独立**判断其来源可靠性（CoVe factored 核查），然后给出总体结论。
+        entailment_note = ""
+        if entailment_idxs:
+            entailment_note = (
+                "\n**内容核实（entailment，重点）**：部分事实附了『已检索到该来源的正文摘录』。"
+                "对这些事实，除判断来源可信度外，还要判断**摘录内容是否真的支持该事实断言**"
+                f"（`supported`）。若断言在摘录中查无实据、或与摘录矛盾（即来源真实但被张冠李戴/"
+                "曲解——misattribution），`supported=false`。未附摘录的事实 `supported=null`（不影响）。"
+                "**任何一条核心事实被判 `supported=false`，总体应 `failed`**，并在 feedback 指出哪条对不上。\n"
+            )
+
+        prompt = f"""你是严格的事实核查员。请对每条事实**独立**判断（CoVe factored 核查），然后给出总体结论。
 
 【用户问题】: {task[:200]}
 
@@ -351,23 +403,23 @@ class VerifierAgent:
 {facts_text}
 
 {source_criteria}
-
+{entailment_note}
 请逐条评判每个事实，然后给出总体结论。如果总体驳回，给出具体的重新搜索指引。
 
 输出 JSON（严格遵守格式，不要输出其他内容）:
 {{
   "fact_verdicts": [
-    {{"index": 1, "reliable": true/false, "reason": "该条事实来源的评判理由"}},
+    {{"index": 1, "reliable": true/false, "supported": true/false/null, "reason": "该条事实来源可信度 + 内容是否被摘录支持的评判理由"}},
     ...
   ],
   "overall": "verified|unverified|failed",
   "reason": "总体评判理由（1-2句）",
-  "feedback": "如果 overall=failed，给 Agent 的具体搜索指引（去哪里搜、用什么关键词、禁止用什么来源）；否则留空"
+  "feedback": "如果 overall=failed，给 Agent 的具体搜索指引（去哪里搜、用什么关键词、禁止用什么来源，或指出哪条断言与来源不符）；否则留空"
 }}"""
 
         try:
             response = self._call_llm(prompt)
-            result = self._parse_cove_response(response, facts)
+            result = self._parse_cove_response(response, facts, entailment_idxs)
             return result
         except Exception as exc:
             # fail-safe（评审 1.9）：重试仍失败 → 不硬拦（避免核查服务宕机时全线阻塞），
@@ -425,8 +477,13 @@ class VerifierAgent:
                 pass
         return VerdictResult(status="unverified", reason="Verifier 无法解析，默认放行")
 
-    def _parse_cove_response(self, text: str, facts: list[dict]) -> VerdictResult:
-        """解析 CoVe factored 核查响应（逐条事实 + 总体结论）"""
+    def _parse_cove_response(self, text: str, facts: list[dict],
+                             entailment_idxs: Optional[list] = None) -> VerdictResult:
+        """解析 CoVe factored 核查响应（逐条事实 + 总体结论）
+
+        entailment_idxs：附了正文摘录、要求判 supported 的事实序号。这些事实里任何一条
+        被判 supported=false（misattribution）→ 强制 failed，即使 LLM 的 overall 放行。
+        """
         block = _extract_json_block(text)
         if not block:
             logger.warning("CoVe 响应无法提取 JSON，默认放行: %s", text[:200])
@@ -446,19 +503,37 @@ class VerifierAgent:
         overall = data.get("overall", "verified")
         reason = data.get("reason", "")
         feedback = data.get("feedback", "")
+        entail_set = set(entailment_idxs or [])
 
-        # 收集被判为不可靠的逐条事实
+        # 收集被判为不可靠 / 内容不被支持（misattribution）的逐条事实
         fact_verdicts = data.get("fact_verdicts", [])
         unreliable_facts = []
+        misattributed = []  # supported=false 的 entailment 事实
         for fv in fact_verdicts:
             idx = fv.get("index", 0)
-            if not fv.get("reliable", True) and 1 <= idx <= len(facts):
-                fact = facts[idx - 1]
-                unreliable_facts.append({
-                    **fact,
-                    "reject_reason": fv.get("reason", "来源不可靠"),
-                })
-                logger.debug("CoVe 逐条驳回 [%d]: %s — %s", idx, fact.get("source", ""), fv.get("reason", ""))
+            if not (1 <= idx <= len(facts)):
+                continue
+            fact = facts[idx - 1]
+            bad_source = not fv.get("reliable", True)
+            # 只对做过 entailment 的事实认定 misattribution（supported 显式为 False）
+            bad_content = idx in entail_set and fv.get("supported", None) is False
+            if bad_source or bad_content:
+                why = fv.get("reason", "来源不可靠")
+                if bad_content:
+                    why = f"[内容不符/misattribution] {why}"
+                    misattributed.append(idx)
+                unreliable_facts.append({**fact, "reject_reason": why})
+                logger.debug("CoVe 逐条驳回 [%d] bad_source=%s bad_content=%s: %s",
+                             idx, bad_source, bad_content, fact.get("source", ""))
+
+        # entailment 硬规则（评审 2.2）：任何核心事实内容不被来源支持 → 强制 failed，
+        # 即使 LLM overall 放行（misattribution 是最危险的幻觉，不容放过）。
+        if misattributed and overall != "failed":
+            logger.warning("CoVe: %d 条事实内容与来源不符（misattribution），强制驳回", len(misattributed))
+            overall = "failed"
+            reason = (reason + " " if reason else "") + \
+                f"（检出 {len(misattributed)} 条断言与其检索来源正文不符）"
+            feedback = feedback or "有关键断言在其引用来源的正文中查无实据，请据实修正或补足来源。"
 
         if overall == "failed":
             logger.info("CoVe 总体驳回: %s（不可靠事实数=%d）", reason[:100], len(unreliable_facts))

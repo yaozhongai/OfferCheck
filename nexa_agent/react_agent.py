@@ -445,6 +445,8 @@ _RETRIEVAL_TOOLS = frozenset({
 FINALIZE_TOOL = "submit_verdict"
 
 _URL_RE = re.compile(r'https?://[^\s\)\]\}"\'，。、]+')
+# 裸域名（无 scheme）——用于从 domain_whois_lookup 这类以域名为参数的工具里取域名
+_BARE_DOMAIN_RE = re.compile(r'\b(?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,}\b', re.IGNORECASE)
 
 
 def _normalize_url(u: str) -> str:
@@ -885,6 +887,9 @@ def react_loop(
     submit_retry_nags = 0
     # 来源对账 registry：本次调查真实见过的 URL（观察全文，截断前收集）
     seen_urls: set[str] = set()
+    # entailment 证据 registry（评审 2.2）：域名 → 该来源检索到的正文摘录，供 Verifier
+    # 核对「来源真实但内容不支持断言」（misattribution）。截断前采集，域名数上限 20。
+    evidence_registry: dict[str, str] = {}
     # 步数预警：OfferCheck stage 下在步数耗尽前注入一次 submit_verdict 提示
     _near_limit_warned = False
     # 跨步硬缓存：tool_name + normalized_args → observation（去重，防冗余调用）
@@ -981,6 +986,8 @@ def react_loop(
             "action_history": list(action_history),
             "seen_urls": list(seen_urls),
             "successful_retrievals": successful_retrievals,
+            # entailment 证据（评审 2.2）：域名 → 检索正文摘录，供 Verifier 内容核实
+            "evidence_registry": dict(evidence_registry),
         }
 
     def _gate_reprompt_msgs(content_or_note: str) -> None:
@@ -1202,6 +1209,18 @@ def react_loop(
                 if last_tool_success:
                     seen_urls.update(_URL_RE.findall(observation))
                 seen_urls.update(_URL_RE.findall(tool_args))
+
+                # entailment 证据 registry（评审 2.2）：把本次检索正文按域名归档（截断前、
+                # 取前 1500 字）。域名来源：观察/参数里的 URL + 参数本身若是裸域名（whois）。
+                if last_tool_success and tool_name in _RETRIEVAL_TOOLS:
+                    _doms = {_url_domain(u) for u in _URL_RE.findall(observation)}
+                    _doms |= {_url_domain(u) for u in _URL_RE.findall(tool_args)}
+                    _doms |= {d.lower().removeprefix("www.")
+                              for d in _BARE_DOMAIN_RE.findall(tool_args)}
+                    _excerpt = observation[:1500]
+                    for _d in _doms:
+                        if _d and _d not in evidence_registry and len(evidence_registry) < 20:
+                            evidence_registry[_d] = _excerpt
 
                 # 信用分配
                 step_utility = _compute_step_utility(
