@@ -5,7 +5,7 @@ import { flushSync } from "react-dom";
 import type { FormData } from "./ui";
 import {
   Stage, EngineEvent, StepStatus, TraceItem, RunState, StageState,
-  STAGE_META, UI, tm, TOOL_LEGEND, summarizeArgs, withEngineSources,
+  STAGE_META, UI, tm, TOOL_LEGEND, summarizeArgs, withEngineSources, withEngineVerdict,
   parseStructuredAnswer, buildFollowupInput, buildInput, valid, summary, inputStyle,
   buildCrossStageContext, completedEarlierStages, ConvTurn,
   InlineTrace, ChatSummary, StructuredResult, StageForm,
@@ -357,6 +357,7 @@ export default function Home() {
           sources: evt.sources ?? prev.sources,
           summaryForUser: evt.summary_for_user ?? prev.summaryForUser,
           suggestedFollowups: evt.suggested_followups ?? prev.suggestedFollowups,
+          verdict: evt.verdict ?? prev.verdict,   // structured verdict (review 3.2)
           streamedAnswer: undefined,  // authoritative answer takes over the live stream
           trace: prev.trace.map(t => t.status === "running" ? { ...t, status: "success" as const } : t) };
 
@@ -369,6 +370,7 @@ export default function Home() {
           status: hasAnswer ? "done" : (evt.success === false ? "error" : "done") as RunState["status"],
           answer: evt.answer ?? prev.answer,
           sources: evt.sources ?? prev.sources,
+          verdict: evt.verdict ?? prev.verdict,   // structured verdict (review 3.2)
           success: evt.success, latency_ms: evt.latency_ms, trials_used: evt.trials_used,
           trace: prev.trace.map(t => t.status === "running" ? { ...t, status: "success" as const } : t) };
       }
@@ -806,7 +808,7 @@ export default function Home() {
               color: "oklch(30% 0.02 50)", padding: "11px 14px",
               borderRadius: "3px 12px 12px 12px" }}>
               <ChatSummary
-                parsed={withEngineSources(parseStructuredAnswer(ss.initialRun.answer), ss.initialRun.sources)}
+                parsed={withEngineVerdict(withEngineSources(parseStructuredAnswer(ss.initialRun.answer), ss.initialRun.sources), ss.initialRun.verdict)}
                 summaryForUser={ss.initialRun.summaryForUser}
                 suggestedFollowups={ss.initialRun.suggestedFollowups}
                 onFollowup={sendSuggestedFollowup}
@@ -874,7 +876,7 @@ export default function Home() {
                 )}
                 {/* Agent response bubble (done): conversational answer-mode text OR verdict summary */}
                 {f.runState.status === "done" && f.runState.answer && (() => {
-                  const parsed = withEngineSources(parseStructuredAnswer(f.runState.answer), f.runState.sources);
+                  const parsed = withEngineVerdict(withEngineSources(parseStructuredAnswer(f.runState.answer), f.runState.sources), f.runState.verdict);
                   const bubbleStyle: React.CSSProperties = { maxWidth: "92%", background: "white",
                     border: "1px solid oklch(90% 0.012 70)", fontSize: 13.5, lineHeight: 1.65,
                     color: "oklch(30% 0.02 50)", padding: "11px 14px", borderRadius: "3px 12px 12px 12px" };
@@ -1113,7 +1115,7 @@ export default function Home() {
 
               {/* Runs: verdict + evidence only (trace now lives inline in the chat) */}
               {allRuns.map((r, idx) => {
-                const parsed = r.run.answer ? withEngineSources(parseStructuredAnswer(r.run.answer), r.run.sources) : null;
+                const parsed = r.run.answer ? withEngineVerdict(withEngineSources(parseStructuredAnswer(r.run.answer), r.run.sources), r.run.verdict) : null;
 
                 // Conversational answer-mode follow-ups (no verdict) live in the chat only —
                 // the board updates only when there's genuinely new structured evidence.

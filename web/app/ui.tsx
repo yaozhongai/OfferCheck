@@ -43,11 +43,23 @@ export type EngineEvent = {
   sources?: SourceItem[];  // structured sources from the engine (problem 5)
   summary_for_user?: string;      // problem 4
   suggested_followups?: string[]; // problem 4
+  verdict?: EngineVerdict; // structured verdict from the engine (review 3.2)
   trials_used?: number;
   latency_ms?: number;
 };
 
 export type SourceItem = { url: string; domain: string; context?: string; verified?: boolean };
+
+// Structured verdict emitted by the engine (submit_verdict path) — review 3.2.
+// Lets the verdict card use the authoritative label/level instead of re-deriving
+// it from the rendered text (fragile: separators, wording, negation context).
+export type EngineVerdict = {
+  verdict: string;         // raw label as the model wrote it (中/英)
+  verdict_level: string;   // normalized: reliable | suspicious | likely_scam | unknown
+  summary: string;
+  red_flags?: string[];
+  need_user_confirm?: string[];
+};
 
 export type StepStatus = "running" | "success" | "notfound" | "error" | "cache";
 
@@ -83,6 +95,7 @@ export type RunState = {
   sources?: SourceItem[];          // engine-provided structured sources (problem 5)
   summaryForUser?: string;         // engine-provided user-facing summary (problem 4)
   suggestedFollowups?: string[];   // engine-provided follow-up suggestions (problem 4)
+  verdict?: EngineVerdict;         // engine-provided structured verdict (review 3.2)
   streamedAnswer?: string;         // live answer-mode text accumulated from answer_delta
   streamStep?: number;             // which step the current streamedAnswer belongs to
   routedStage?: Stage;             // followup auto-routed to another stage capability
@@ -369,6 +382,22 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
 export function withEngineSources(parsed: ParsedAnswer, sources?: SourceItem[]): ParsedAnswer {
   if (!sources || sources.length === 0) return parsed;
   return { ...parsed, sources };
+}
+
+// Prefer the engine's authoritative structured verdict over text re-parsing (review 3.2).
+// The engine already knows the label + normalized level (computed label-first, so negation
+// context like "未发现诈骗" never flips it). We map the raw label to the canonical VERDICT_STYLES
+// key via detectVerdict applied to the *clean label only* (safe — no full-text substring risk).
+// Facts / red flags / sources stay from the text+sources path. Falls back when absent (additive).
+export function withEngineVerdict(parsed: ParsedAnswer, v?: EngineVerdict): ParsedAnswer {
+  if (!v || !v.verdict) return parsed;
+  const label = detectVerdict(v.verdict) ?? v.verdict;
+  return {
+    ...parsed,
+    verdictLabel: label,
+    verdictRaw: v.verdict,
+    verdictReason: v.summary || parsed.verdictReason,
+  };
 }
 
 // One conversation turn in a stage thread (user question + assistant answer).

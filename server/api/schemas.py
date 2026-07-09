@@ -71,6 +71,7 @@ class RunStageResponse(BaseModel):
     trial_details: List[Dict[str, Any]] = Field(default_factory=list)
     reflections: List[str] = Field(default_factory=list)
     latency_ms: float = 0.0
+    verdict: Optional[Dict[str, Any]] = Field(None, description="结构化裁定（评审 3.2）：submit_verdict 路径直传，供前端裁定卡免文本解析")
 
 
 # ---------------------------------------------------------------------------

@@ -81,6 +81,7 @@ class ReflexionResult:
     trials_used: int
     trial_details: list[dict] = field(default_factory=list)
     reflections: list[str] = field(default_factory=list)
+    verdict: Optional[dict] = None  # 结构化裁定（评审 3.2）：submit_verdict 路径直传，供 server→前端
 
     @property
     def total_llm_calls(self) -> int:
@@ -290,6 +291,7 @@ class ReflexionReActAgent:
             trajectory = react_result["trajectory"]
             steps_used = react_result["steps_used"]
             terminated_reason = react_result["terminated_reason"]
+            react_verdict = react_result.get("verdict")  # 结构化裁定（评审 3.2），可能为 None
             trial_elapsed = time.time() - t0
 
             # 快速失败: API 余额不足/认证失败等不可恢复错误，直接终止所有 Trial
@@ -391,6 +393,7 @@ class ReflexionReActAgent:
                         trials_used=trial,
                         trial_details=trial_details,
                         reflections=self.memory.get_memories_for_prompt(),
+                        verdict=react_verdict,  # 评审 3.2
                     )
 
             # 阶段 4: 失败 → 生成反思
@@ -474,6 +477,7 @@ class ReflexionReActAgent:
             trials_used=self.max_trials,
             trial_details=trial_details,
             reflections=self.memory.get_memories_for_prompt(),
+            verdict=react_verdict,  # 评审 3.2：最后一轮的结构化裁定（若有）
         )
 
     # ── 反思生成 ──

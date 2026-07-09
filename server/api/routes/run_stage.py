@@ -84,6 +84,7 @@ def run_stage(request: RunStageRequest, http_request: Request) -> RunStageRespon
         trial_details=result.trial_details,
         reflections=result.reflections,
         latency_ms=latency_ms,
+        verdict=result.verdict,
     )
 
 
@@ -143,6 +144,7 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
                 "reflections": result.reflections,
                 "latency_ms": round((time.time() - t0) * 1000),
                 "stage": effective_stage,
+                "verdict": result.verdict,  # 结构化裁定（评审 3.2），additive
             })
         except Exception as exc:  # noqa: BLE001
             logger.error("run_stage/stream 引擎异常: %s", exc, exc_info=True)

@@ -455,6 +455,25 @@ def _render_verdict(fields: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_verdict_struct(fields: dict) -> dict:
+    """从 submit_verdict 字段构建结构化裁定（评审 3.2：结构化 Verdict 端到端）。
+
+    引擎在此处拥有权威结构化字段（label / 归一化等级 / 摘要 / 红旗 / 待确认），
+    直传给 SSE→前端，避免前端从渲染文本正则再抠一遍（易受措辞/分隔符影响，也是
+    SPEC §5「否定语境误伤」这类 structure↔text 往返 bug 的根源）。verdict_level
+    经 verifier._classify_verdict_level（label-first，否定语境不误伤）计算，权威。
+    """
+    from nexa_agent.verifier import _classify_verdict_level
+    raw = (fields.get("verdict") or "").strip()
+    return {
+        "verdict": raw,                                          # 原始 label（中/英原文）
+        "verdict_level": _classify_verdict_level(raw) if raw else "unknown",
+        "summary": (fields.get("summary") or "").strip(),
+        "red_flags": _as_str_list(fields.get("red_flags")),
+        "need_user_confirm": _as_str_list(fields.get("need_user_confirm")),
+    }
+
+
 def _answer_requires_evidence(final_answer: str, stage: Optional[str]) -> bool:
     """判断该 Final Answer 是否属于"必须取证"的裁定/事实型输出。
 
@@ -791,8 +810,12 @@ def react_loop(
         return out
 
     def _finalize(final_answer: str, reason: str = "final_answer",
-                  summary_for_user: str = "", suggested_followups: Optional[list] = None) -> dict:
-        """收尾：来源对账（AIS）→ 标注答案 → 打印/发射/策展 → 组装结果。"""
+                  summary_for_user: str = "", suggested_followups: Optional[list] = None,
+                  verdict: Optional[dict] = None) -> dict:
+        """收尾：来源对账（AIS）→ 标注答案 → 打印/发射/策展 → 组装结果。
+
+        verdict：可选的结构化裁定（评审 3.2，仅 submit_verdict 路径有）；additive
+        直传前端，缺省则前端回退文本解析。"""
         called_tools = {name for name, _ in action_history}
         annotated, attribution = attribute_sources(final_answer, seen_urls, called_tools)
         if attribution["unverified"]:
@@ -808,6 +831,11 @@ def react_loop(
                            attribution["unverified"], attribution["total_sources"])
             _emit("ais_downgrade", step=step_count,
                   total_sources=attribution["total_sources"], unverified=attribution["unverified"])
+            # 同步结构化裁定：AIS 把 reliable 文本改写为存疑，结构化字段也须一致（评审 3.2）
+            if verdict and verdict.get("verdict_level") == "reliable":
+                verdict = {**verdict,
+                           "verdict": "存疑" if _lang != "en" else "Suspicious",
+                           "verdict_level": "suspicious"}
         print(f"\n✅ Final Answer:\n{annotated}")
         logger.info("ReAct 完成 step=%d final_answer_len=%d unverified=%d",
                     step_count, len(annotated), attribution["unverified"])
@@ -816,7 +844,8 @@ def react_loop(
         structured_sources = _build_structured_sources(final_answer)
         _emit("final_answer", step=step_count, answer=annotated, sources=structured_sources,
               summary_for_user=summary_for_user or "",
-              suggested_followups=suggested_followups or [])
+              suggested_followups=suggested_followups or [],
+              verdict=verdict)
         _print_summary(step_count, total_prompt_tokens, total_completion_tokens)
         _curation_step(verbose=verbose)
         return {
@@ -835,6 +864,8 @@ def react_loop(
             "successful_retrievals": successful_retrievals,
             # entailment 证据（评审 2.2）：域名 → 检索正文摘录，供 Verifier 内容核实
             "evidence_registry": dict(evidence_registry),
+            # 结构化裁定（评审 3.2）：仅 submit_verdict 路径非空，additive 直传前端
+            "verdict": verdict,
         }
 
     def _gate_reprompt_msgs(content_or_note: str) -> None:
@@ -1007,6 +1038,7 @@ def react_loop(
                     final_answer, reason="submit_verdict",
                     summary_for_user=(fields.get("summary_for_user") or "").strip(),
                     suggested_followups=_as_str_list(fields.get("suggested_followups")),
+                    verdict=_build_verdict_struct(fields),  # 评审 3.2：结构化裁定直传
                 )
 
             for tc in msg.tool_calls:
