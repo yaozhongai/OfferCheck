@@ -375,9 +375,17 @@ export default function Home() {
           trace: prev.trace.map(t => t.status === "running" ? { ...t, status: "success" as const } : t) };
       }
 
-      case "error":
-        return { ...prev, status: "error", errorMsg: evt.message ?? "Unknown error",
-          trace: prev.trace.map(t => t.status === "running" ? { ...t, status: "error" as const } : t) };
+      case "error": {
+        // If a result already arrived (final_answer/done), a trailing error is a
+        // non-fatal caveat — keep the verdict instead of flipping to an error page.
+        // Only surface a hard error when there's no answer to show.
+        const hasAnswer = !!(evt.answer ?? prev.answer);
+        return { ...prev,
+          status: hasAnswer ? "done" : "error",
+          errorMsg: hasAnswer ? prev.errorMsg : (evt.message ?? "Unknown error"),
+          trace: prev.trace.map(t => t.status === "running"
+            ? { ...t, status: (hasAnswer ? "success" : "error") as StepStatus } : t) };
+      }
     }
     return prev;
   }
@@ -450,11 +458,15 @@ export default function Home() {
         }
       }
     } catch (err) {
+      // A late stream/read error (e.g. proxy cutting the SSE tail) after the result
+      // already arrived must NOT nuke the completed verdict to an error page — the
+      // answer is in hand, so settle as done. Only error out when there's no answer.
       flushSync(() => {
-        setRun(currentStage, prev => ({
-          ...prev, status: "error", errorMsg: String(err),
-          trace: prev.trace.map(t => t.status === "running" ? { ...t, status: "error" as const } : t),
-        }));
+        setRun(currentStage, prev => prev.answer
+          ? { ...prev, status: "done",
+              trace: prev.trace.map(t => t.status === "running" ? { ...t, status: "success" as const } : t) }
+          : { ...prev, status: "error", errorMsg: String(err),
+              trace: prev.trace.map(t => t.status === "running" ? { ...t, status: "error" as const } : t) });
       });
     }
   }
