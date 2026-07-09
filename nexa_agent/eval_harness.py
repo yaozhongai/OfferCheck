@@ -93,6 +93,9 @@ class EvalRecord:
     tags: list[str] = field(default_factory=list)
     agent_success: bool = False
     timestamp: str = ""
+    # Token 用量（评审 3.6）：单条用例的调查主循环 in/out token，作成本指标
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     # 裁定级评测：期望/预测裁定归一化等级（None = 非 OfferCheck 用例）
     expected_verdict: Optional[str] = None
     predicted_verdict: Optional[str] = None
@@ -115,6 +118,10 @@ class EvalReport:
     avg_steps: float
     failure_mode_dist: dict[str, int] = field(default_factory=dict)
     per_tag_accuracy: dict[str, float] = field(default_factory=dict)
+    # 成本指标（评审 3.6）：每裁定平均 token（in/out/合计），与准确率同为可量化 harness 硬通货
+    avg_prompt_tokens: float = 0.0
+    avg_completion_tokens: float = 0.0
+    avg_total_tokens: float = 0.0
     config_snapshot: dict = field(default_factory=dict)
     # 裁定级指标（仅当套件含 expected_verdict 用例时填充）
     verdict_metrics: dict = field(default_factory=dict)
@@ -510,9 +517,12 @@ class EvalHarness:
                 agent_success = result.success
                 trials_used = result.trials_used
                 reflections = result.reflections
+                # trial_details 的步数键是 "steps_used"（此前误用 "steps" → avg_steps 恒 0）
                 step_count = sum(
-                    d.get("steps", 0) for d in result.trial_details
+                    d.get("steps_used", 0) for d in result.trial_details
                 )
+                prompt_tokens = result.total_prompt_tokens       # 评审 3.6：成本指标
+                completion_tokens = result.total_completion_tokens
             except Exception as e:
                 elapsed = time.time() - start_time
                 prediction = ""
@@ -520,6 +530,8 @@ class EvalHarness:
                 trials_used = 0
                 reflections = []
                 step_count = 0
+                prompt_tokens = 0
+                completion_tokens = 0
                 logger.error("Case %s 执行异常: %s", case.case_id[:8], e)
 
             # 评分模式三选一：裁定级 / 关键词召回 / GAIA 子串
@@ -552,6 +564,8 @@ class EvalHarness:
                 "predicted_verdict": predicted_verdict,
                 "expected_keywords": case.expected_keywords,
                 "keyword_recall": round(keyword_recall, 3) if keyword_recall is not None else None,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
             }
 
             failure_mode = extract_failure_mode(record_dict)
@@ -590,6 +604,9 @@ class EvalHarness:
         elapsed_list = [r.elapsed_seconds for r in records]
         trials_list = [r.trials_used for r in records]
         steps_list = [r.step_count for r in records]
+        prompt_tok_list = [r.prompt_tokens for r in records]
+        completion_tok_list = [r.completion_tokens for r in records]
+        total_tok_list = [r.prompt_tokens + r.completion_tokens for r in records]
 
         failure_modes = Counter(
             r.failure_mode for r in records if r.failure_mode
@@ -616,6 +633,9 @@ class EvalHarness:
             avg_steps=round(statistics.mean(steps_list), 1) if steps_list else 0,
             failure_mode_dist=dict(failure_modes),
             per_tag_accuracy={k: round(v, 1) for k, v in per_tag_accuracy.items()},
+            avg_prompt_tokens=round(statistics.mean(prompt_tok_list), 0) if prompt_tok_list else 0,
+            avg_completion_tokens=round(statistics.mean(completion_tok_list), 0) if completion_tok_list else 0,
+            avg_total_tokens=round(statistics.mean(total_tok_list), 0) if total_tok_list else 0,
             verdict_metrics=compute_verdict_metrics(records),
             keyword_metrics=compute_keyword_metrics(records),
             config_snapshot={
@@ -643,6 +663,9 @@ class EvalHarness:
         print(f"  Avg Time:  {report.avg_elapsed:.1f}s")
         print(f"  Avg Trials: {report.avg_trials:.1f}")
         print(f"  Avg Steps: {report.avg_steps:.0f}")
+        if report.avg_total_tokens:
+            print(f"  Avg Tokens: {report.avg_total_tokens:.0f} "
+                  f"(in {report.avg_prompt_tokens:.0f} / out {report.avg_completion_tokens:.0f}) — 每裁定成本")
 
         if report.failure_mode_dist:
             print(f"\n  Failure Modes:")
@@ -710,6 +733,7 @@ def analyze_results(path: str):
 
     elapsed_list = [r["elapsed_seconds"] for r in records if "elapsed_seconds" in r]
     trials_list = [r.get("trials_used", 1) for r in records]
+    token_list = [r.get("prompt_tokens", 0) + r.get("completion_tokens", 0) for r in records]
 
     print(f"\n{'═' * 60}")
     print(f"  Analysis: {path}")
@@ -718,6 +742,8 @@ def analyze_results(path: str):
     print(f"  Correct:  {correct} ({accuracy:.1f}%)")
     print(f"  Avg Time: {statistics.mean(elapsed_list):.1f}s" if elapsed_list else "")
     print(f"  Avg Trials: {statistics.mean(trials_list):.1f}")
+    if any(token_list):
+        print(f"  Avg Tokens: {statistics.mean(token_list):.0f} — 每裁定成本")
 
     if failure_modes:
         print(f"\n  Failure Mode Distribution:")

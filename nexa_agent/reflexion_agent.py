@@ -82,6 +82,16 @@ class ReflexionResult:
     trial_details: list[dict] = field(default_factory=list)
     reflections: list[str] = field(default_factory=list)
     verdict: Optional[dict] = None  # 结构化裁定（评审 3.2）：submit_verdict 路径直传，供 server→前端
+    # Token 用量（评审 3.6）：跨 Trial 累加的调查主循环 token 数，作产品/评测的成本指标。
+    # 口径 = 各 Trial react_loop 的 in/out token 之和（调查主循环，成本主体）；
+    # Evaluator/Verifier/反思等 fast 层辅助调用暂不计入（单次、量级远小于调查循环）。
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        """本次任务的总 token（in + out）。"""
+        return self.total_prompt_tokens + self.total_completion_tokens
 
     @property
     def total_llm_calls(self) -> int:
@@ -237,6 +247,10 @@ class ReflexionReActAgent:
         # 跨 Trial 的事实草稿板（Scratchpad）
         scratchpad_facts: list[str] = []
 
+        # 跨 Trial 的 token 累加（评审 3.6：成本指标）
+        agg_prompt_tokens = 0
+        agg_completion_tokens = 0
+
         for trial in range(1, self.max_trials + 1):
             t0 = time.time()
             _emit("trial_start", trial=trial, max_trials=self.max_trials)
@@ -294,6 +308,20 @@ class ReflexionReActAgent:
             react_verdict = react_result.get("verdict")  # 结构化裁定（评审 3.2），可能为 None
             trial_elapsed = time.time() - t0
 
+            # Token 用量累加 + usage 事件（评审 3.6）：本轮 react_loop 的 in/out token
+            # 加进跨 Trial 累计，并发一条 additive `usage` 事件（成本可观测；SSE 契约冻结
+            # 仅允许新增事件）。放在 fast-fail 之前，保证即便本轮不可恢复错误也计入用量。
+            trial_pt = react_result.get("total_prompt_tokens", 0)
+            trial_ct = react_result.get("total_completion_tokens", 0)
+            agg_prompt_tokens += trial_pt
+            agg_completion_tokens += trial_ct
+            _emit("usage", trial=trial, steps_used=steps_used,
+                  prompt_tokens=trial_pt, completion_tokens=trial_ct,
+                  total_tokens=trial_pt + trial_ct,
+                  cumulative_prompt_tokens=agg_prompt_tokens,
+                  cumulative_completion_tokens=agg_completion_tokens,
+                  cumulative_total_tokens=agg_prompt_tokens + agg_completion_tokens)
+
             # 快速失败: API 余额不足/认证失败等不可恢复错误，直接终止所有 Trial
             if terminated_reason == "llm_error" and any(
                 code in answer for code in ["402", "401", "Insufficient Balance", "Authentication"]
@@ -313,6 +341,8 @@ class ReflexionReActAgent:
                         "elapsed_seconds": round(trial_elapsed, 1), "reflection": None,
                     }],
                     reflections=[],
+                    total_prompt_tokens=agg_prompt_tokens,
+                    total_completion_tokens=agg_completion_tokens,
                 )
 
             # 阶段 3: 评估（传入结构化行动日志，替代截断 trajectory）
@@ -394,6 +424,8 @@ class ReflexionReActAgent:
                         trial_details=trial_details,
                         reflections=self.memory.get_memories_for_prompt(),
                         verdict=react_verdict,  # 评审 3.2
+                        total_prompt_tokens=agg_prompt_tokens,
+                        total_completion_tokens=agg_completion_tokens,
                     )
 
             # 阶段 4: 失败 → 生成反思
@@ -478,6 +510,8 @@ class ReflexionReActAgent:
             trial_details=trial_details,
             reflections=self.memory.get_memories_for_prompt(),
             verdict=react_verdict,  # 评审 3.2：最后一轮的结构化裁定（若有）
+            total_prompt_tokens=agg_prompt_tokens,
+            total_completion_tokens=agg_completion_tokens,
         )
 
     # ── 反思生成 ──

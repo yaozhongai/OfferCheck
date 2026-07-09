@@ -85,6 +85,11 @@ def run_stage(request: RunStageRequest, http_request: Request) -> RunStageRespon
         reflections=result.reflections,
         latency_ms=latency_ms,
         verdict=result.verdict,
+        usage={
+            "prompt_tokens": result.total_prompt_tokens,
+            "completion_tokens": result.total_completion_tokens,
+            "total_tokens": result.total_tokens,
+        },
     )
 
 
@@ -94,8 +99,8 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
 
     事件类型（data 行 JSON 的 type 字段）：
       trial_start / step_start / action / observation / correction /
-      verifier_start / verifier_result / trial_evaluated / final_answer /
-      done（终止，携带最终裁定）/ error（异常）
+      verifier_start / verifier_result / trial_evaluated / usage（每 Trial token 用量）/
+      final_answer / done（终止，携带最终裁定 + 累计 usage）/ error（异常）
     """
     enforce_run_quota(http_request)
     image_path = validate_image_path(request.image_path, get_config().project_root)
@@ -145,6 +150,11 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
                 "latency_ms": round((time.time() - t0) * 1000),
                 "stage": effective_stage,
                 "verdict": result.verdict,  # 结构化裁定（评审 3.2），additive
+                "usage": {                   # Token 用量（评审 3.6），additive
+                    "prompt_tokens": result.total_prompt_tokens,
+                    "completion_tokens": result.total_completion_tokens,
+                    "total_tokens": result.total_tokens,
+                },
             })
         except Exception as exc:  # noqa: BLE001
             logger.error("run_stage/stream 引擎异常: %s", exc, exc_info=True)
