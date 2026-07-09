@@ -44,15 +44,14 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger, start_run_log, stop_run_log
-from nexa_agent.react_agent import react_loop, LLM_MODEL, LLM_API_KEY, LLM_BASE_URL
+from nexa_agent.react_agent import react_loop, LLM_API_KEY
 from nexa_agent.memory import ReflexionMemory, ReflectionEntry, _jaccard_similarity
 from nexa_agent.evaluator import Evaluator, EvalResult, create_evaluator
 from nexa_agent.verifier import VerifierAgent, should_trigger_verifier
 from nexa_agent.config import (
-    REFLEXION_CONFIG, REACT_CONFIG, MEMORY_CONFIG, PATH_CONFIG,
-    thinking_extra_body, get_config_summary, get_model_for_role,
+    REFLEXION_CONFIG, REACT_CONFIG, MEMORY_CONFIG, PATH_CONFIG, get_config_summary,
 )
-from nexa_agent.util.llm_retry import call_with_retry
+from nexa_agent.llm_gateway import complete as llm_complete
 
 logger = get_logger("reflexion_agent")
 
@@ -531,43 +530,19 @@ class ReflexionReActAgent:
             return f"任务执行失败（{failure_mode}）。{eval_feedback[:200]}"
 
     def _call_reflection_llm(self, user_prompt: str) -> str:
-        """调用 LLM 生成反思（独立会话，使用 fast 模型）"""
-        from openai import OpenAI
-
-        client = OpenAI(
-            api_key=LLM_API_KEY,
-            base_url=LLM_BASE_URL,
-            timeout=120.0,
-        )
-
-        model = get_model_for_role("reflection")
-        temperature = REFLEXION_CONFIG["reflection_temperature"]
-
-        kwargs = {
-            "model": model,
-            "messages": [
+        """调用 LLM 生成反思（独立会话，fast 模型）——统一走 Gateway（评审 3.1）。"""
+        result = llm_complete(
+            [
                 {"role": "system", "content": self.reflection_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": 512,
-            "temperature": temperature,
-            "stream": False,
-        }
+            role="reflection", max_tokens=512,
+            temperature=REFLEXION_CONFIG["reflection_temperature"], timeout=120.0,
+        )
+        content = result.content
+        tokens = result.completion_tokens
 
-        # 反思不需要深度推理 → 关闭思考（GMI Flash 生效；DeepSeek 官方走 thinking.disabled）
-        _eb = thinking_extra_body(model, enable_thinking=False)
-        if _eb:
-            kwargs["extra_body"] = _eb
-
-        t0 = time.time()
-        response = call_with_retry(lambda: client.chat.completions.create(**kwargs))  # 评审 1.9
-        elapsed = (time.time() - t0) * 1000
-
-        content = response.choices[0].message.content or ""
-        tokens = response.usage.total_tokens if response.usage else 0
-
-        logger.info("反思生成完成 model=%s elapsed=%.0fms tokens=%d len=%d",
-                    model, elapsed, tokens, len(content))
+        logger.info("反思生成完成 tokens=%d len=%d", tokens, len(content))
         return content
 
     # ── P0: 有界教训提取 ──
@@ -583,8 +558,6 @@ class ReflexionReActAgent:
         Returns:
             教训字符串列表（1-3条）
         """
-        from openai import OpenAI
-
         lesson_prompt = f"""请将以下反思归纳为 1-3 条标准化教训。要求：
 
 - 每条不超过 50 字
@@ -603,29 +576,15 @@ class ReflexionReActAgent:
 下次搜索无结果时，立即用更精确的关键词重新 web_search，不要重复同一查询。"""
 
         try:
-            client = OpenAI(
-                api_key=LLM_API_KEY,
-                base_url=LLM_BASE_URL,
-                timeout=60.0,
-            )
-
-            model = get_model_for_role("lesson_extract")
-            kwargs = {
-                "model": model,
-                "messages": [
+            # 统一走 Gateway（评审 3.1）
+            result = llm_complete(
+                [
                     {"role": "system", "content": "你是一个知识蒸馏专家。请只输出简洁的教训文本，每条一行。"},
                     {"role": "user", "content": lesson_prompt},
                 ],
-                "max_tokens": 256,
-                "temperature": 0.1,
-                "stream": False,
-            }
-            _eb = thinking_extra_body(model, enable_thinking=False)  # 评审 1.2
-            if _eb:
-                kwargs["extra_body"] = _eb
-
-            response = call_with_retry(lambda: client.chat.completions.create(**kwargs))  # 评审 1.9
-            content = response.choices[0].message.content or ""
+                role="lesson_extract", max_tokens=256, temperature=0.1, timeout=60.0,
+            )
+            content = result.content
 
             # 解析教训行
             lessons = []
@@ -710,7 +669,6 @@ class ReflexionReActAgent:
         这些数据点会作为**线索**在下一轮 Trial 复用，避免重复劳动；但注入时保留
         可反驳性（见 _build_scratchpad_block），不作为裁定的免检前提。
         """
-        from openai import OpenAI
 
         # 只在有实质性答案或较长轨迹时提取（避免对空轨迹浪费 API）
         if len(trajectory) < 500 and len(answer) < 50:
@@ -738,28 +696,15 @@ Agent 最终答案: {answer_snippet}
 请只输出列表，每条一行："""
 
         try:
-            client = OpenAI(
-                api_key=LLM_API_KEY,
-                base_url=LLM_BASE_URL,
-                timeout=60.0,
-            )
-            model = get_model_for_role("lesson_extract")
-            kwargs = {
-                "model": model,
-                "messages": [
+            # 统一走 Gateway（评审 3.1）
+            result = llm_complete(
+                [
                     {"role": "system", "content": "你是一个数据提取专家。只输出从工具返回中确认的事实数据，每条一行。"},
                     {"role": "user", "content": prompt},
                 ],
-                "max_tokens": 300,
-                "temperature": 0.0,
-                "stream": False,
-            }
-            _eb = thinking_extra_body(model, enable_thinking=False)  # 评审 1.2
-            if _eb:
-                kwargs["extra_body"] = _eb
-
-            response = call_with_retry(lambda: client.chat.completions.create(**kwargs))  # 评审 1.9
-            content = response.choices[0].message.content or ""
+                role="lesson_extract", max_tokens=300, temperature=0.0, timeout=60.0,
+            )
+            content = result.content
 
             if "无" in content and len(content) < 20:
                 return []

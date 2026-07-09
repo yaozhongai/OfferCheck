@@ -22,8 +22,8 @@ import json
 import re
 from typing import Optional
 
-from nexa_agent.config import MODEL_CONFIG, thinking_extra_body, get_model_for_role
 from nexa_agent.util.json_extract import extract_json_block
+from nexa_agent.llm_gateway import complete as llm_complete
 from nexa_agent.logger import get_logger
 
 logger = get_logger("stage_router")
@@ -81,7 +81,6 @@ def _keyword_gate(question: str, current: str) -> set[str]:
 
 def _llm_confirm(question: str, current: str, candidates: set[str]) -> Optional[str]:
     """fast 层单次分类确认：keep 或某个 stage；失败回 None（安全 keep）"""
-    from openai import OpenAI
 
     stage_desc = {
         "stage1": "选岗调研：调查某公司/岗位是否真实、健康、值得投递",
@@ -100,26 +99,17 @@ def _llm_confirm(question: str, current: str, candidates: set[str]) -> Optional[
         '只输出 JSON：{"route": "<keep|stageN>", "why": "<一句话>"}'
     )
     try:
-        client = OpenAI(
-            api_key=MODEL_CONFIG["api_key"], base_url=MODEL_CONFIG["base_url"],
-            timeout=15.0, max_retries=1,
-        )
-        kwargs = {
-            "model": get_model_for_role("evaluator_llm"),
-            "messages": [
+        # 统一走 Gateway（评审 3.1）。max_retries=1：路由器是「不确定就 keep」的快路径，
+        # 失败即安全回落 keep（见 except），不叠加重循环（评审 1.9 例外）。
+        result = llm_complete(
+            [
                 {"role": "system", "content": "你是意图路由器。只输出 JSON。倾向保守：不确定就 keep。"},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": 128,
-            "temperature": 0.0,
-        }
-        _eb = thinking_extra_body(kwargs["model"], enable_thinking=False)  # 评审 1.2
-        if _eb:
-            kwargs["extra_body"] = _eb
-        # 路由器保留 SDK 层 max_retries=1 + 失败即安全回落 keep（见 except），
-        # 不叠加重循环——它本就是「不确定就 keep」的快路径（评审 1.9 例外说明）。
-        resp = client.chat.completions.create(**kwargs)
-        text = resp.choices[0].message.content or ""
+            role="evaluator_llm", max_tokens=128, temperature=0.0,
+            timeout=15.0, max_retries=1,
+        )
+        text = result.content
         block = extract_json_block(text)  # 评审 1.7：健壮抽取替代 re.search
         if not block:
             return None

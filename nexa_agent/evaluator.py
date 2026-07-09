@@ -28,9 +28,9 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger
-from nexa_agent.config import get_model_for_role, MODEL_CONFIG, thinking_extra_body
+from nexa_agent.config import get_model_for_role, MODEL_CONFIG
 from nexa_agent.util.json_extract import extract_json_block, repair_truncated_json
-from nexa_agent.util.llm_retry import call_with_retry
+from nexa_agent.llm_gateway import complete as llm_complete
 
 logger = get_logger("evaluator")
 
@@ -552,36 +552,15 @@ D. 结论有轨迹中的**实际证据/计算**支撑，而非凭空断言
     # ── LLM 调用 ──
 
     def _call_llm(self, user_prompt: str) -> str:
-        """调用 LLM 进行评估"""
-        from openai import OpenAI
-
-        client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            timeout=60.0,
-        )
-
-        kwargs = {
-            "model": self.model_name,
-            "messages": [
+        """调用 LLM 进行评估——统一走 LLM Gateway（评审 3.1）。"""
+        result = llm_complete(
+            [
                 {"role": "system", "content": "你是一个严格的任务评估专家。请只输出 JSON，不要输出其他内容。"},
                 {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": 512,
-            "temperature": 0.0,
-            "stream": False,
-        }
-
-        # 关闭思考：统一走 thinking_extra_body（GMI=enable_thinking:false / DeepSeek 官方=
-        # thinking.disabled）。旧的 SUPPORTS_THINKING_PARAM 守卫在 GMI 下恒 False → 评估
-        # 调用没关思考，慢而贵（评审 1.2）。
-        _eb = thinking_extra_body(self.model_name, enable_thinking=False)
-        if _eb:
-            kwargs["extra_body"] = _eb
-
-        # 瞬时错误重试（评审 1.9）：抖动时先自愈，避免 _llm_evaluate 静默回退启发式
-        response = call_with_retry(lambda: client.chat.completions.create(**kwargs))
-        return response.choices[0].message.content or ""
+            model=self.model_name, max_tokens=512, temperature=0.0, timeout=60.0,
+        )
+        return result.content
 
 
 # ==========================================================================

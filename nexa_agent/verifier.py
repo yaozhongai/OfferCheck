@@ -29,9 +29,9 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger
-from nexa_agent.config import MODEL_CONFIG, thinking_extra_body, get_model_for_role
+from nexa_agent.config import get_model_for_role
 from nexa_agent.util.json_extract import extract_json_block, repair_truncated_json
-from nexa_agent.util.llm_retry import call_with_retry
+from nexa_agent.llm_gateway import complete as llm_complete
 
 logger = get_logger("verifier")
 
@@ -261,8 +261,6 @@ class VerifierAgent:
 
     def __init__(self):
         self.model = get_model_for_role("evaluator_llm")  # fast 模型
-        self.base_url = MODEL_CONFIG["base_url"]
-        self.api_key = MODEL_CONFIG["api_key"]
         # 来源可信度规则（不需要 LLM 就能判断的快捷规则）
         self._quick_reject_patterns = [
             (r"quora\.com", "Quora（问答网站，UGC内容）"),
@@ -437,40 +435,18 @@ class VerifierAgent:
             )
 
     def _call_llm(self, prompt: str) -> str:
-        from openai import OpenAI
-
-        client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            timeout=30.0,
-        )
-
-        kwargs = {
-            "model": self.model,
-            "messages": [
+        # 统一走 LLM Gateway（评审 3.1）：client/thinking/retry/空响应重试/记账集中管理。
+        # max_tokens=2048：CoVe 逐条核查 6-8 条事实易超小上限被截断。
+        # retry_on_empty：GMI 大 prompt（带 entailment 摘录）偶发空返回（评审 2.2）。
+        result = llm_complete(
+            [
                 {"role": "system", "content": "你是事实核查员。只输出 JSON，不要输出其他内容。"},
                 {"role": "user", "content": prompt},
             ],
-            # CoVe 逐条核查每条事实产出一个 JSON 对象，6-8 条事实 + 理由
-            # 极易超过旧上限 768 → JSON 被截断 → "无法解析，默认放行"。放大到 2048。
-            "max_tokens": 2048,
-            "temperature": 0.0,
-            "stream": False,
-        }
-        _eb = thinking_extra_body(self.model, enable_thinking=False)
-        if _eb:
-            kwargs["extra_body"] = _eb
-
-        # 瞬时错误重试（评审 1.9）+ 空响应重试（评审 2.2：GMI 大 prompt 偶发返回空 content，
-        # 非异常、finish=stop，call_with_retry 抓不到——这里显式再试一次）
-        for _attempt in range(2):
-            response = call_with_retry(lambda: client.chat.completions.create(**kwargs))
-            content = response.choices[0].message.content or ""
-            if content.strip():
-                return content
-            logger.warning("Verifier LLM 返回空 content（finish=%s），重试 (%d/1)",
-                           getattr(response.choices[0], "finish_reason", "?"), _attempt + 1)
-        return ""
+            model=self.model, max_tokens=2048, temperature=0.0,
+            timeout=30.0, retry_on_empty=True,
+        )
+        return result.content
 
     def _parse_response(self, text: str) -> VerdictResult:
         """兼容旧格式 {"passed": ..., "reason": ..., "feedback": ...}"""
