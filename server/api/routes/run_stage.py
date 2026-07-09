@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from server.api.schemas import RunStageRequest, RunStageResponse
+from server.api.prompt_assembly import resolve_task_input
 from server.api.deps import get_config
 from server.security import (
     enforce_run_quota, validate_image_path, clamp_run_limits, RUN_CONCURRENCY,
@@ -57,13 +58,15 @@ def run_stage(request: RunStageRequest, http_request: Request) -> RunStageRespon
     image_path = validate_image_path(request.image_path, get_config().project_root)
     if not RUN_CONCURRENCY.try_acquire():
         raise HTTPException(status_code=429, detail="并发调查数已达上限，请稍后再试")
-    logger.info("run_stage 请求 stage=%s input_len=%d", request.stage, len(request.input))
+    # 结构化会话字段 → 引擎任务串（评审 3.4：拼串逻辑从前端收回 server）
+    task_input = resolve_task_input(request)
+    logger.info("run_stage 请求 stage=%s input_len=%d", request.stage, len(task_input))
 
     try:
         agent = _build_agent(request)
         t0 = time.time()
         result = agent.execute(
-            task=request.input,
+            task=task_input,
             image_path=image_path,
             verbose=False,
             stage=request.stage,
@@ -106,8 +109,11 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
     image_path = validate_image_path(request.image_path, get_config().project_root)
     if not RUN_CONCURRENCY.try_acquire():
         raise HTTPException(status_code=429, detail="并发调查数已达上限，请稍后再试")
+    # 结构化会话字段 → 引擎任务串（评审 3.4）；stage_router 与 execute 共用同一串，
+    # [追问/补充信息] 标记契约不破。
+    task_input = resolve_task_input(request)
     logger.info("run_stage/stream 请求 stage=%s input_len=%d",
-                request.stage, len(request.input))
+                request.stage, len(task_input))
 
     event_q: "queue.Queue[dict]" = queue.Queue()
     _SENTINEL = {"type": "__end__"}
@@ -121,7 +127,7 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
             effective_stage = request.stage
             if request.auto_route and request.stage:
                 from nexa_agent.stage_router import route_stage_for_followup
-                routed, reason = route_stage_for_followup(request.input, request.stage)
+                routed, reason = route_stage_for_followup(task_input, request.stage)
                 if routed:
                     logger.info("stage 路由 %s → %s（%s）", request.stage, routed, reason)
                     event_q.put({
@@ -133,7 +139,7 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
                     effective_stage = routed
 
             result = agent.execute(
-                task=request.input,
+                task=task_input,
                 image_path=image_path,
                 verbose=False,
                 stage=effective_stage,

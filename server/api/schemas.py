@@ -35,6 +35,20 @@ class HealthResponse(BaseModel):
 # OfferCheck 阶段执行（瘦调用 nexa_agent 核心）
 # ---------------------------------------------------------------------------
 
+class FollowupContext(BaseModel):
+    """结构化 followup 上下文（评审 3.4）——替代前端把对话窗口拼进单条 prompt。
+
+    server 据此权威组装 `[对话上下文]/[追问/补充信息]` 任务串（见 prompt_assembly），
+    前端不再需要知道中文标记契约。字段均可选，长度上限由 server 侧强制。
+    """
+    history: List[Dict[str, Any]] = Field(
+        default_factory=list, description="最近对话窗口 [{user, assistant}]，assistant 为紧凑结构或原文摘录"
+    )
+    materials: Optional[Dict[str, str]] = Field(None, description="用户材料 {resume?, jd?}")
+    original_task: Optional[str] = Field(None, description="本 Case 原始任务摘要")
+    prior_sources: Optional[List[str]] = Field(None, description="最近裁定轮的来源 URL，用于引用连续性")
+
+
 class RunStageRequest(BaseModel):
     """OfferCheck 阶段执行请求
 
@@ -42,7 +56,7 @@ class RunStageRequest(BaseModel):
     按 stage 加载对应阶段任务定义 prompt。stage=None 时为纯通用引擎问答。
     """
     input: str = Field(..., min_length=1, max_length=20000,
-                       description="用户输入：offer/JD 文本、公司名或聊天记录")
+                       description="用户输入：本轮任务/追问正文（结构化上下文改走 followup_context / carryover）")
     stage: Optional[str] = Field(
         None, description="阶段：stage1=选岗调研 | stage4=offer证伪（None=通用引擎）"
     )
@@ -59,6 +73,12 @@ class RunStageRequest(BaseModel):
     )
     output_lang: Optional[str] = Field(
         None, description="可选：显式输出语言 'en'|'zh'（评审 1.10）。指定则优先，避免内容检测阈值把混合语言判翻；未指定回退内容检测"
+    )
+    followup_context: Optional[FollowupContext] = Field(
+        None, description="结构化 followup 上下文（评审 3.4）：提供则 server 权威组装对话上下文串，input 只需带本轮追问正文"
+    )
+    carryover: Optional[List[Dict[str, Any]]] = Field(
+        None, description="结构化跨阶段携带（评审 3.4）：本案早前阶段已取证结论条目，server 组装为 [本阶段任务] 参考前缀"
     )
 
 

@@ -403,9 +403,25 @@ export function withEngineVerdict(parsed: ParsedAnswer, v?: EngineVerdict): Pars
 // One conversation turn in a stage thread (user question + assistant answer).
 export type ConvTurn = { question: string; answer: string };
 
+// Structured followup context (评审 3.4). The frontend no longer packs the
+// conversation window into a single prompt string with `[追问/补充信息]` markers —
+// it sends these structured fields and the SERVER assembles the task string
+// (server/api/prompt_assembly.py). Shapes mirror what the server expects.
+export type FollowupAssistant =
+  | { verdict: string; reason: string; key_facts: string[]; red_flags: string[] }
+  | string;
+export type FollowupHistoryTurn = { user: string; assistant: FollowupAssistant };
+export type FollowupContext = {
+  history: FollowupHistoryTurn[];
+  materials?: { resume?: string; jd?: string };
+  original_task?: string;
+  prior_sources?: string[];
+};
+
 /**
- * Pack the followup request with a ROLLING CONVERSATION WINDOW, not just the
- * last answer. Two failure modes this fixes (both hit in real use):
+ * Build the STRUCTURED followup context (评审 3.4) from a ROLLING CONVERSATION
+ * WINDOW — no longer a packed prompt string (server owns assembly now). Two
+ * failure modes this shape fixes (both hit in real use):
  *  - Conversational (non-verdict) replies like "请提供 JD 全文和简历" parse to
  *    zero structured fields — the old parsed-only context dropped them entirely,
  *    so a reply of "如图 + attachment" lost its meaning. Non-verdict answers now
@@ -413,17 +429,16 @@ export type ConvTurn = { question: string; answer: string };
  *  - Multi-turn requests ("upload your JD" → user uploads) need the *asking*
  *    turn visible, not just the latest one. We keep the last 3 turns.
  */
-export function buildFollowupInput(
-  question: string,
+export function buildFollowupContext(
   turns: ConvTurn[],
   formSummary: string,
   materials?: { resume?: string; jd?: string },
-): string {
+): FollowupContext {
   // Recent turns: verdict answers → compact structured form; conversational
   // answers → raw excerpt (they often contain requests/instructions to the user).
-  const history = turns.slice(-3).map(t => {
+  const history: FollowupHistoryTurn[] = turns.slice(-3).map(t => {
     const parsed = parseStructuredAnswer(t.answer);
-    const assistant = parsed.verdictLabel
+    const assistant: FollowupAssistant = parsed.verdictLabel
       ? {
           verdict: parsed.verdictLabel,
           reason: parsed.verdictReason.slice(0, 250),
@@ -441,19 +456,20 @@ export function buildFollowupInput(
     if (parsed.verdictLabel) { priorSources = parsed.sources.slice(0, 8).map(s => s.url); break; }
   }
 
-  const ctx: Record<string, unknown> = {
+  const ctx: FollowupContext = {
+    history,
     original_task: formSummary.slice(0, 400),
-    conversation_history: history,
   };
   if (priorSources.length > 0) ctx.prior_sources = priorSources;
   // User-provided materials from the case forms — so "compare my resume with
-  // this JD" works even when the resume was entered turns/stages ago.
-  const mat: Record<string, string> = {};
+  // this JD" works even when the resume was entered turns/stages ago. (Server
+  // re-caps lengths; frontend cap just keeps the payload small.)
+  const mat: { resume?: string; jd?: string } = {};
   if (materials?.resume?.trim()) mat.resume = materials.resume.trim().slice(0, 1500);
   if (materials?.jd?.trim()) mat.jd = materials.jd.trim().slice(0, 1500);
-  if (Object.keys(mat).length > 0) ctx.user_materials = mat;
+  if (Object.keys(mat).length > 0) ctx.materials = mat;
 
-  return `[对话上下文 - 供参考]\n${JSON.stringify(ctx, null, 2)}\n\n[追问/补充信息]\n${question}`;
+  return ctx;
 }
 
 // ─── Cross-stage carryover ────────────────────────────────────────────────────
@@ -484,14 +500,26 @@ export function completedEarlierStages(
   return STAGE_ORDER.slice(0, cut).filter(s => latestStageAnswer(stageStates[s]) !== null);
 }
 
-/** Compact JSON context block from completed earlier stages; null if none. */
-export function buildCrossStageContext(
+// One earlier-stage carryover entry (评审 3.4). Server assembles these into the
+// `[本案早前阶段的已取证结论]` reference prefix (server/api/prompt_assembly.py).
+export type CrossStageEntry = {
+  stage: string;
+  summary?: string;
+  verdict?: string;
+  reason?: string;
+  key_facts?: string[];
+  red_flags?: string[];
+  sources?: string[];
+};
+
+/** Structured carryover entries from completed earlier stages; null if none. */
+export function buildCrossStageEntries(
   stageStates: Record<Stage, StageState>, current: Stage,
-): string | null {
+): CrossStageEntry[] | null {
   const carried = completedEarlierStages(stageStates, current);
   if (carried.length === 0) return null;
 
-  const entries = carried.map(s => {
+  return carried.map(s => {
     const answer = latestStageAnswer(stageStates[s])!;
     const meta = STAGE_META[s];
     if (s === "stage2") {
@@ -508,8 +536,6 @@ export function buildCrossStageContext(
       sources: parsed.sources.slice(0, 6).map(src => src.url),
     };
   });
-
-  return `[本案早前阶段的已取证结论 - 供参考，新裁定仍须独立取证核实]\n${JSON.stringify(entries, null, 2)}`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

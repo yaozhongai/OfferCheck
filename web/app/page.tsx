@@ -6,8 +6,8 @@ import type { FormData } from "./ui";
 import {
   Stage, EngineEvent, StepStatus, TraceItem, RunState, StageState,
   STAGE_META, UI, tm, TOOL_LEGEND, summarizeArgs, withEngineSources, withEngineVerdict,
-  parseStructuredAnswer, buildFollowupInput, buildInput, valid, summary, inputStyle,
-  buildCrossStageContext, completedEarlierStages, ConvTurn,
+  parseStructuredAnswer, buildFollowupContext, buildInput, valid, summary, inputStyle,
+  buildCrossStageEntries, completedEarlierStages, ConvTurn, FollowupContext, CrossStageEntry,
   InlineTrace, ChatSummary, StructuredResult, StageForm,
   apiUrl, DEMO_FORMS, STAGE_FIELDS,
 } from "./ui";
@@ -390,6 +390,9 @@ export default function Home() {
     isFollowup: boolean,
     imagePath?: string,
     requestStage?: Stage,  // sticky-routed capability; UI state stays keyed to currentStage
+    // Structured session context (评审 3.4): server assembles the task string from
+    // these instead of the frontend packing `[追问/补充信息]` / `[本阶段任务]` markers.
+    extra?: { followup_context?: FollowupContext; carryover?: CrossStageEntry[] },
   ) {
     const setRun = isFollowup ? setLastFollowupRun : setInitialRun;
 
@@ -405,6 +408,8 @@ export default function Home() {
           answer_mode: isFollowup,  // followups may answer conversationally + stream
           auto_route: isFollowup,   // followups may switch to another stage capability
           image_path: imagePath,    // attached screenshot/PDF (engine OCRs via analyze_image)
+          ...(extra?.followup_context ? { followup_context: extra.followup_context } : {}),
+          ...(extra?.carryover ? { carryover: extra.carryover } : {}),
         }),
       });
       if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
@@ -461,11 +466,10 @@ export default function Home() {
     if (!input.trim() && attachedImage) input = "请分析我上传的这张截图/图片，并据此展开调查。";
     if (!input.trim()) return;
 
-    // Cross-stage carryover: pack completed earlier stages' findings into the task
-    // so this run starts with the case's accumulated context (real wiring for the
-    // "findings are carried over" promise — the engine still re-verifies evidence).
-    const crossCtx = buildCrossStageContext(stageStates, stage);
-    if (crossCtx) input = `${crossCtx}\n\n[本阶段任务]\n${input}`;
+    // Cross-stage carryover: completed earlier stages' findings travel as a
+    // STRUCTURED field now (评审 3.4) — the server assembles the `[本阶段任务]`
+    // reference prefix. The engine still re-verifies evidence for any new verdict.
+    const carryover = buildCrossStageEntries(stageStates, stage);
     _idSeq = 0;
     setBoardCollapsed(false);  // a fresh result should surface the board
 
@@ -502,7 +506,8 @@ export default function Home() {
     // Auto-scroll chat to bottom
     setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
 
-    await runSSE(input, stage, false, img?.path);
+    await runSSE(input, stage, false, img?.path, undefined,
+      carryover ? { carryover } : undefined);
   }
 
   // ─── Send follow-up ───────────────────────────────────────────────
@@ -514,7 +519,7 @@ export default function Home() {
 
     // Rolling conversation window: initial task + every completed followup turn.
     // Conversational (non-verdict) replies are preserved as raw text inside
-    // buildFollowupInput — a "please upload your JD" turn must survive so the
+    // buildFollowupContext — a "please upload your JD" turn must survive so the
     // next "如图 + attachment" reply keeps its meaning.
     const formSummary = summary(stage, forms);
     const turns: ConvTurn[] = [];
@@ -525,7 +530,10 @@ export default function Home() {
       if (f.runState.answer) turns.push({ question: f.question, answer: f.runState.answer });
     }
 
-    const input = buildFollowupInput(q, turns, formSummary, {
+    // Structured followup context (评审 3.4): input carries only the current
+    // question; the conversation window / materials / prior sources travel as
+    // fields and the server assembles the `[追问/补充信息]` task string.
+    const followupContext = buildFollowupContext(turns, formSummary, {
       resume: forms.resume, jd: forms.jd,
     });
 
@@ -560,7 +568,7 @@ export default function Home() {
     setAttachedImage(null);
 
     setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-    await runSSE(input, stage, true, img?.path, requestStage);
+    await runSSE(q, stage, true, img?.path, requestStage, { followup_context: followupContext });
   }
 
   function sendFollowup() { void runFollowup(ss.chatInput.trim()); }
