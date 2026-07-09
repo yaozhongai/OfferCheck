@@ -163,4 +163,4 @@ python -m nexa_agent.eval_harness compare --baseline run_A.jsonl --current run_B
 
 ---
 
-The project “constitution” (core goals / explicit non-goals / key decisions and rationale) lives in [SPEC.md](SPEC.md) (in Chinese).
+Core goals, explicit non-goals, and key design decisions with rationale are documented internally.

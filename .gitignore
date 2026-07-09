@@ -95,3 +95,7 @@ milvus_data/
 
 1780846142722.png
 milvus_manager.py
+
+# 内部文档（本地保留，不入公开仓库）
+SPEC.md
+CLAUDE.md
