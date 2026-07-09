@@ -211,18 +211,16 @@ MEMORY_CONFIG = {
 
 SEARCH_CONFIG = {
     # provider 优先级（有序降级）。第一个"可用且健康"的 provider 胜出。
-    # 默认 Tavily 优先（额度够时质量最好）→ 额度尽时无缝切自建 SearXNG。
+    # Tavily 优先（额度够时质量最好，1000/月）→ Exa（1000/月免费，配 key 即用，机房 IP 也可）
+    # → DDG（无 key 兜底，机房 IP 易限流）。未配 key 的 provider 经 is_available() 自动跳过。
     "provider_order": [
         p.strip()
-        for p in os.environ.get("SEARCH_PROVIDER_ORDER", "tavily,searxng,exa,ddg").split(",")
+        for p in os.environ.get("SEARCH_PROVIDER_ORDER", "tavily,exa,ddg").split(",")
         if p.strip()
     ],
     "max_results": int(os.environ.get("SEARCH_MAX_RESULTS", "5")),
     "snippet_max_chars": int(os.environ.get("SEARCH_SNIPPET_MAX_CHARS", "300")),
     "request_timeout": int(os.environ.get("SEARCH_TIMEOUT", "15")),
-    # 自建 SearXNG 后端（见 searxng/ 目录）——opt-in：未显式设置 SEARXNG_BASE_URL 时禁用，
-    # 避免未部署 SearXNG 的环境（如线上容器）反复连 localhost 失败、白白占用降级槽位
-    "searxng_base_url": os.environ.get("SEARXNG_BASE_URL", ""),
     # Exa（可选，1000/月免费，免信用卡）
     "exa_api_key": os.environ.get("EXA_API_KEY", ""),
     # 健康熔断：单 provider 连续失败 N 次后，冷却一段时间内跳过
@@ -233,10 +231,10 @@ SEARCH_CONFIG = {
     "enrich_top_k": int(os.environ.get("SEARCH_ENRICH_TOP_K", "3")),
     "enrich_max_chars": int(os.environ.get("SEARCH_ENRICH_MAX_CHARS", "1200")),
     "enrich_timeout": int(os.environ.get("SEARCH_ENRICH_TIMEOUT", "12")),
-    # 仅增强摘要偏弱的 provider；Tavily/Exa 自带优质正文，无需重复抓取
+    # 仅增强摘要偏弱的 provider（DDG）；Tavily/Exa 自带优质正文，无需重复抓取
     "enrich_providers": [
         p.strip()
-        for p in os.environ.get("SEARCH_ENRICH_PROVIDERS", "searxng,ddg").split(",")
+        for p in os.environ.get("SEARCH_ENRICH_PROVIDERS", "ddg").split(",")
         if p.strip()
     ],
 }

@@ -39,7 +39,7 @@ A scenario-agnostic, reusable investigation core (headless — no FastAPI/DB/UI;
 - **Verifier fact gateway**: conclusions bound to `[Fact]/[Source]/[Confidence]`, stage-aware calibration + per-fact CoVe verification
 - **Eval Harness**: regression evaluation pipeline + failure-mode attribution + run comparison (`compare` with a 2pp regression gate)
 - **Observability**: structured trace emission hook (`on_event`) → tool/source/step/verdict event stream, bridged to SSE by the server layer
-- **Pluggable search layer**: Tavily → self-hosted SearXNG → Exa → DuckDuckGo ordered fallback + health-based circuit breaking
+- **Pluggable search layer**: Tavily → Exa → DuckDuckGo ordered fallback + health-based circuit breaking
 
 ```
 One investigation, the core loop (nexa_agent):

@@ -96,8 +96,9 @@
   - **为什么**：原生 function calling 下「无 tool_calls = 完成」是行业约定（Claude Agent SDK / Strands / ai-sdk）；结构化终止工具解析 100% 可靠且与产品裁定 schema 同构。
 
 ### 3.5 搜索/检索
-- **决策**：可插拔 provider 层（Tavily → 自建 SearXNG → Exa → DuckDuckGo 有序降级）+ 健康熔断 + per-provider 指标 + enrich 并行正文增强；web_fetch 走 Jina Reader → trafilatura 兜底。
-- **为什么**：Tavily 免费额度有限，自建 SearXNG 兜底保证零成本可持续；provider 抽象 + 熔断 + 指标本身是 harness 工程展示点。
+- **决策**：可插拔 provider 层（Tavily → Exa → DuckDuckGo 有序降级）+ 健康熔断 + per-provider 指标 + enrich 并行正文增强；web_fetch 走 Jina Reader → trafilatura 兜底。
+- **为什么**：Tavily 免费额度有限（1000/月），Exa（1000/月免费、配 key 即用、机房 IP 可用）+ DDG（无 key 兜底）保证降级链;provider 抽象 + 熔断 + 指标本身是 harness 工程展示点。
+- **~~自建 SearXNG~~（已移除，2026-07-09）**：曾作为"零成本兜底"设计（provider + `searxng/` docker 部署），但实测两条硬伤——① 元搜索靠抓取公共引擎，**机房 IP（Railway 等）会被 Google/Bing 判爬虫封**，云端返回空；② 需自运维一台服务器 + 设 `SEARXNG_BASE_URL`，与"开箱即用的替代源"诉求不符。故整套移除；云端即用的免费兜底改由 **Exa**（只需一个 key）承担。SearXNG 客户端结构本身正确（真客户端 + 未部署服务端），移除纯属性价比取舍。
 - **已知短板（待优化，见 §5）**：跨步/跨 Trial 无硬缓存去重、无检索溯源 registry 复用、trafilatura 环境漂移、登录墙域名(x.com 451)无兜底。
 
 ### 3.6 记忆

@@ -209,14 +209,14 @@ def _is_login_wall(url: str) -> bool:
 
 @register(
     name="web_search",
-    description="搜索互联网，返回前若干条实时结果（含内容摘要）；内部经可插拔 provider 层多源降级（Tavily→自建 SearXNG→Exa→DuckDuckGo）",
+    description="搜索互联网，返回前若干条实时结果（含内容摘要）；内部经可插拔 provider 层多源降级（Tavily→Exa→DuckDuckGo）",
     signature="web_search(query)",
     examples=["web_search(2025年诺贝尔奖得主)"],
 )
 def web_search(query: str) -> str:
-    """Web 搜索 — 经可插拔 provider 层（Tavily→SearXNG→Exa→DDG 有序降级）。
+    """Web 搜索 — 经可插拔 provider 层（Tavily→Exa→DDG 有序降级）。
 
-    provider 顺序、SearXNG 地址、熔断阈值等由 config.SEARCH_CONFIG 控制。
+    provider 顺序、Exa key、熔断阈值等由 config.SEARCH_CONFIG 控制。
 
     Args:
         query: 搜索关键词
@@ -255,7 +255,7 @@ def web_search(query: str) -> str:
         logger.info("web_search URL 去重: %d → %d 条", len(results), len(deduped))
     results = deduped
 
-    # 增强层：对摘要偏弱的 provider（如自建 SearXNG / DDG）抓取正文补齐
+    # 增强层：对摘要偏弱的 provider（DDG）抓取正文补齐
     if SEARCH_CONFIG["enrich_enabled"] and provider in SEARCH_CONFIG["enrich_providers"]:
         results = enrich_results(
             results,

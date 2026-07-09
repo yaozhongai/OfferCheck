@@ -7,7 +7,7 @@
     router = get_default_router()
     results, provider = router.search("DeepSeek Harness", max_results=5)
 
-provider 顺序、SearXNG 地址、Exa key、熔断阈值等均由 config.SEARCH_CONFIG 控制。
+provider 顺序、Exa key、熔断阈值等均由 config.SEARCH_CONFIG 控制。
 """
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from .enrich import enrich_results
 from .providers import (
     DDGProvider,
     ExaProvider,
-    SearXNGProvider,
     TavilyProvider,
     build_provider,
 )
@@ -56,7 +55,6 @@ __all__ = [
     "SearchRouter",
     "enrich_results",
     "TavilyProvider",
-    "SearXNGProvider",
     "ExaProvider",
     "DDGProvider",
     "build_provider",

@@ -109,15 +109,14 @@ def test_metrics_track_success_rate_and_latency():
 
 def test_build_router_from_config_respects_order():
     cfg = {
-        "provider_order": ["ddg", "searxng"],
-        "searxng_base_url": "http://localhost:8888",
+        "provider_order": ["ddg", "exa"],
         "exa_api_key": "",
         "request_timeout": 5,
         "health_fail_threshold": 3,
         "health_cooldown_sec": 60,
     }
     router = build_router_from_config(cfg)
-    assert [p.name for p in router.providers] == ["ddg", "searxng"]
+    assert [p.name for p in router.providers] == ["ddg", "exa"]
 
 
 def test_max_results_passed_through():

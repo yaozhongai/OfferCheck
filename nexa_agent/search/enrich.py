@@ -1,8 +1,8 @@
 """搜索结果增强层 —— 对 top-k 结果抓取正文替换摘要。
 
-动机：自建 SearXNG / DDG 返回的 `content` 摘要偏短，质量不及 Tavily
+动机：DDG 返回的 `content` 摘要偏短，质量不及 Tavily
 （Tavily 在云端已抓取并提取正文）。本层复用现有 fetch 链
-（Jina Reader → trafilatura）补齐这一差距，使自建源贴近 Tavily 体验。
+（Jina Reader → trafilatura）补齐这一差距，使兜底源贴近 Tavily 体验。
 
 特性：
 - 并行抓取（ThreadPoolExecutor），总耗时 ≈ 最慢单条，而非累加
