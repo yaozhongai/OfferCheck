@@ -99,3 +99,8 @@ milvus_manager.py
 # 内部文档（本地保留，不入公开仓库）
 SPEC.md
 CLAUDE.md
+
+# 开发/测试用（本地保留，不入公开仓库）
+skills/
+tests/
+pytest.ini

@@ -1,4 +1,4 @@
-.PHONY: help agent backend vlm stop install test clean
+.PHONY: help agent backend vlm stop install clean
 
 help:
 	@echo "Nexa Agent — core+app 分层架构"
@@ -7,7 +7,6 @@ help:
 	@echo ""
 	@echo "核心引擎 (nexa_agent, headless):"
 	@echo "  agent Q='...'   跑一次自主调查 (可加 STAGE=stage1|stage4)"
-	@echo "  test            跑核心/搜索单测"
 	@echo ""
 	@echo "后端 (server, FastAPI):"
 	@echo "  backend         启动 server (:8000) —— 注: chat/upload 待接入核心(501)"
@@ -37,10 +36,6 @@ vlm:
 # 安装依赖
 install:
 	pip install -r requirements.txt
-
-# 单元测试
-test:
-	python -m pytest tests/ -q
 
 # 停止
 stop:
