@@ -16,22 +16,29 @@ import nexa_agent.react_agent as ra
 # ── 1.1 温度显式传入 ────────────────────────────────────────────────────
 
 def test_call_llm_with_tools_passes_temperature(monkeypatch):
+    # 3.1b 后 call_llm_with_tools 走 GATEWAY——patch 网关的 client 捕获实际 kwargs。
     captured = {}
 
-    class _FakeCompletions:
-        def create(self, **kwargs):
-            captured.update(kwargs)
-            msg = SimpleNamespace(content="hi", tool_calls=None, reasoning_content=None)
-            usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
-            return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=usage)
+    def _create(**kwargs):
+        captured.update(kwargs)
+        msg = SimpleNamespace(content="hi", tool_calls=None, reasoning_content=None)
+        usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="stop")], usage=usage)
 
     class _FakeClient:
-        chat = SimpleNamespace(completions=_FakeCompletions())
+        def with_options(self, **kw):
+            return self
 
-    monkeypatch.setattr(ra, "_get_llm_client", lambda: _FakeClient())
-    ra.call_llm_with_tools([{"role": "user", "content": "hi"}], tools=[], enable_thinking=False)
-    assert "temperature" in captured
+        @property
+        def chat(self):
+            return SimpleNamespace(completions=SimpleNamespace(create=_create))
+
+    monkeypatch.setattr(ra.GATEWAY, "_client", _FakeClient())
+    choice, pt, ct = ra.call_llm_with_tools(
+        [{"role": "user", "content": "hi"}], tools=[], enable_thinking=False)
     assert captured["temperature"] == ra.MODEL_CONFIG["react_temperature"] == 0.0
+    # 契约：返回的 choice.message 是原始 message（下游 _assistant_msg_to_dict 依赖它）
+    assert choice.message.content == "hi"
 
 
 # ── 1.5 兜底汇总走 _finalize ─────────────────────────────────────────────

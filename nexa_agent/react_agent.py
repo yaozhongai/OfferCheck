@@ -57,9 +57,10 @@ from nexa_agent.tools import (
     get_openai_tool_definitions,
 )
 from nexa_agent.config import (
-    MODEL_CONFIG, MODEL_TIER, thinking_extra_body,
+    MODEL_CONFIG, MODEL_TIER,
     get_model_for_role, DYNAMIC_UPGRADE_THRESHOLD,
 )
+from nexa_agent.llm_gateway import GATEWAY
 
 logger = get_logger("react_agent")
 
@@ -85,13 +86,8 @@ MAX_EVIDENCE_GATE_NAGS = 2
 # 拒绝并要求重新提交的最大次数；超过则回退用 assistant 文本 / 原始参数收尾，绝不返回空裁定。
 MAX_SUBMIT_RETRY_NAGS = 2
 
-# LLM 瞬时错误重试：分类与退避逻辑已抽到共享 helper（nexa_agent.util.llm_retry），
-# 供质量门（evaluator/verifier/reflexion/stage_router）同享（评审 1.9）。此处保留
-# 模块级常量作为下游 lambda（max_attempts=…）的引用，语义与 helper 默认一致。
-from nexa_agent.util.llm_retry import (
-    call_with_retry, is_transient_llm_error as _is_transient_llm_error,
-    DEFAULT_MAX_RETRIES as LLM_MAX_RETRIES, DEFAULT_BASE_DELAY as LLM_RETRY_BASE_DELAY,
-)
+# LLM 调用统一走 GATEWAY（评审 3.1b）；此处仅保留 trace 事件里引用的重试次数常量。
+from nexa_agent.util.llm_retry import DEFAULT_MAX_RETRIES as LLM_MAX_RETRIES
 from nexa_agent.util.injection import scan_injection
 
 # System Prompt 路径
@@ -191,17 +187,6 @@ Final Answer: <最终答案>
 # LLM 调用
 # ==========================================================================
 
-def _get_llm_client():
-    """获取 OpenAI 客户端实例"""
-    from openai import OpenAI
-
-    return OpenAI(
-        api_key=LLM_API_KEY,
-        base_url=LLM_BASE_URL,
-        timeout=120.0,
-    )
-
-
 def call_llm(
     messages: List[dict],
     enable_thinking: bool = True,
@@ -209,49 +194,17 @@ def call_llm(
     model: Optional[str] = None,
     tools: Optional[List[dict]] = None,
 ) -> Tuple[str, int, int]:
-    """调用 DeepSeek LLM（兜底汇总等非 tool calling 场景）
+    """调用 LLM（兜底汇总 / 策展等非 tool calling 场景）——统一走 Gateway（评审 3.1b）。
 
     Returns:
         (response_text, prompt_tokens, completion_tokens)
     """
-    client = _get_llm_client()
-    actual_model = model or LLM_MODEL
-
-    kwargs = {
-        "model": actual_model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "stream": False,
-        "temperature": MODEL_CONFIG["react_temperature"],  # 评审 1.1：此前从未显式传入
-    }
-
-    if tools:
-        kwargs["tools"] = tools
-    else:
-        kwargs["stop"] = ["Observation:"]
-
-    _eb = thinking_extra_body(actual_model, enable_thinking)
-    if _eb:
-        kwargs["extra_body"] = _eb
-
-    t0 = time.time()
-    response = client.chat.completions.create(**kwargs)
-    elapsed_ms = (time.time() - t0) * 1000
-
-    choice = response.choices[0]
-    content = choice.message.content or ""
-
-    prompt_tokens = response.usage.prompt_tokens if response.usage else 0
-    completion_tokens = response.usage.completion_tokens if response.usage else 0
-    total_tokens = response.usage.total_tokens if response.usage else 0
-
-    logger.info(
-        "LLM 调用完成 model=%s elapsed=%.0fms tokens(in=%d out=%d total=%d) thinking=%s",
-        actual_model, elapsed_ms, prompt_tokens, completion_tokens, total_tokens,
-        "on" if enable_thinking else "off",
+    result = GATEWAY.complete(
+        messages, model=model or LLM_MODEL, tools=tools, max_tokens=max_tokens,
+        temperature=MODEL_CONFIG["react_temperature"], enable_thinking=enable_thinking,
+        stop=(None if tools else ["Observation:"]),
     )
-
-    return content, prompt_tokens, completion_tokens
+    return result.content, result.prompt_tokens, result.completion_tokens
 
 
 def call_llm_with_tools(
@@ -262,53 +215,21 @@ def call_llm_with_tools(
     model: Optional[str] = None,
     on_retry: Optional[Callable[[int, Exception], None]] = None,
 ):
-    """调用 DeepSeek LLM 并返回完整 choice（支持 tool_calls）
-
-    对瞬时错误（连接/超时/5xx/429）指数退避重试 LLM_MAX_RETRIES 次；4xx 不重试直接抛。
-    on_retry(attempt, exc)：每次重试前回调（供上层发 trace 事件）。
+    """调用 LLM 并返回完整 choice（支持 tool_calls）——统一走 Gateway（评审 3.1b）。
 
     Returns:
         (choice, prompt_tokens, completion_tokens)
-        choice.message 可能含 .tool_calls 或 .content
+        choice.message 为**原始 SDK message**——保住 .tool_calls 对象与 .reasoning_content，
+        供 _assistant_msg_to_dict 回传（DeepSeek 推理模型多轮 tool-calling 的硬约束）。
     """
-    client = _get_llm_client()
-    actual_model = model or LLM_MODEL
-
-    kwargs = {
-        "model": actual_model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "stream": False,
-        "tools": tools,
-        "temperature": MODEL_CONFIG["react_temperature"],  # 评审 1.1：此前从未显式传入
-    }
-
-    _eb = thinking_extra_body(actual_model, enable_thinking)
-    if _eb:
-        kwargs["extra_body"] = _eb
-
-    t0 = time.time()
-    # 瞬时错误指数退避重试（4xx 不重试）—— 统一走共享 helper（评审 1.9）
-    response = call_with_retry(
-        lambda: client.chat.completions.create(**kwargs), on_retry=on_retry,
+    import types as _types
+    result = GATEWAY.complete(
+        messages, model=model or LLM_MODEL, tools=tools, max_tokens=max_tokens,
+        temperature=MODEL_CONFIG["react_temperature"], enable_thinking=enable_thinking,
+        on_retry=on_retry,
     )
-    elapsed_ms = (time.time() - t0) * 1000
-
-    choice = response.choices[0]
-    prompt_tokens = response.usage.prompt_tokens if response.usage else 0
-    completion_tokens = response.usage.completion_tokens if response.usage else 0
-    total_tokens = response.usage.total_tokens if response.usage else 0
-
-    has_tool_calls = bool(choice.message.tool_calls)
-    logger.info(
-        "LLM 调用完成 model=%s elapsed=%.0fms tokens(in=%d out=%d total=%d) "
-        "tool_calls=%s thinking=%s",
-        actual_model, elapsed_ms, prompt_tokens, completion_tokens, total_tokens,
-        has_tool_calls,
-        "on" if enable_thinking else "off",
-    )
-
-    return choice, prompt_tokens, completion_tokens
+    choice = _types.SimpleNamespace(message=result.message, finish_reason=result.finish_reason)
+    return choice, result.prompt_tokens, result.completion_tokens
 
 
 _FINAL_ANSWER_RE = re.compile(r"(?:Final\s+Answer|最终答案)\s*[:：]\s*", re.IGNORECASE)
@@ -345,90 +266,17 @@ def stream_llm_with_tools(
     就停止 on_delta（工具步骤不该逐字吐给用户）。返回与 call_llm_with_tools 相同的
     (choice, prompt_tokens, completion_tokens)，choice 为鸭子类型对象，可无缝喂给现有
     react_loop 的 情况1（tool_calls）/ 情况2（文本）逻辑，无需改动下游。
+
+    统一走 Gateway.stream（评审 3.1b）；Thought 脚手架过滤经 answer_filter 注入。
     """
     import types as _types
-
-    client = _get_llm_client()
-    actual_model = model or LLM_MODEL
-    kwargs = {
-        "model": actual_model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        "tools": tools,
-        "temperature": MODEL_CONFIG["react_temperature"],  # 评审 1.1：此前从未显式传入
-    }
-    _eb = thinking_extra_body(actual_model, enable_thinking)
-    if _eb:
-        kwargs["extra_body"] = _eb
-
-    # 瞬时错误指数退避重试（4xx 不重试）—— 统一走共享 helper（评审 1.9）
-    stream = call_with_retry(
-        lambda: client.chat.completions.create(**kwargs), on_retry=on_retry,
+    result = GATEWAY.stream(
+        messages, model=model or LLM_MODEL, tools=tools, max_tokens=max_tokens,
+        temperature=MODEL_CONFIG["react_temperature"], enable_thinking=enable_thinking,
+        on_retry=on_retry, on_delta=on_delta, answer_filter=_stream_answer_portion,
     )
-
-    acc_content = ""
-    tool_slots: dict = {}
-    is_tool = False
-    emitted = 0  # 已通过 on_delta 吐出的"答案部分"长度
-    prompt_tokens = completion_tokens = 0
-    finish_reason = "stop"
-
-    for chunk in stream:
-        usage = getattr(chunk, "usage", None)
-        if usage:
-            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-        if not getattr(chunk, "choices", None):
-            continue
-        ch0 = chunk.choices[0]
-        if getattr(ch0, "finish_reason", None):
-            finish_reason = ch0.finish_reason
-        delta = ch0.delta
-        if getattr(delta, "tool_calls", None):
-            is_tool = True  # 这是工具步：停止逐字流式（推理不吐给用户）
-            for tc in delta.tool_calls:
-                slot = tool_slots.setdefault(tc.index, {"id": None, "type": "function", "name": "", "args": ""})
-                if getattr(tc, "id", None):
-                    slot["id"] = tc.id
-                if getattr(tc, "type", None):
-                    slot["type"] = tc.type
-                fn = getattr(tc, "function", None)
-                if fn:
-                    if getattr(fn, "name", None):
-                        slot["name"] += fn.name
-                    if getattr(fn, "arguments", None):
-                        slot["args"] += fn.arguments
-        piece = getattr(delta, "content", None)
-        if piece:
-            acc_content += piece
-            # 只逐字流式"答案部分"（剔除 Thought 脚手架），且仅在非工具步
-            if not is_tool:
-                ans = _stream_answer_portion(acc_content)
-                if len(ans) > emitted:
-                    try:
-                        on_delta(ans[emitted:])
-                    except Exception:  # noqa: BLE001
-                        pass
-                    emitted = len(ans)
-
-    tool_calls_objs = None
-    if tool_slots:
-        tool_calls_objs = [
-            _types.SimpleNamespace(
-                id=s["id"], type=s["type"],
-                function=_types.SimpleNamespace(name=s["name"], arguments=s["args"]),
-            )
-            for _, s in sorted(tool_slots.items())
-        ]
-    msg = _types.SimpleNamespace(
-        content=(acc_content or None), tool_calls=tool_calls_objs, reasoning_content=None,
-    )
-    choice = _types.SimpleNamespace(message=msg, finish_reason=finish_reason)
-    logger.info("LLM 流式调用完成 model=%s tokens(in=%d out=%d) tool_calls=%s",
-                actual_model, prompt_tokens, completion_tokens, bool(tool_calls_objs))
-    return choice, prompt_tokens, completion_tokens
+    choice = _types.SimpleNamespace(message=result.message, finish_reason=result.finish_reason)
+    return choice, result.prompt_tokens, result.completion_tokens
 
 
 # ==========================================================================

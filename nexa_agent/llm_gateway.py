@@ -144,6 +144,117 @@ class LLMGateway:
             message=msg,
         )
 
+    def stream(
+        self,
+        messages: List[dict],
+        *,
+        role: Optional[str] = None,
+        model: Optional[str] = None,
+        tools: Optional[List[dict]] = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.0,
+        enable_thinking: bool = False,
+        timeout: float = 120.0,
+        max_retries: Optional[int] = None,
+        on_retry: Optional[Callable[[int, Exception], None]] = None,
+        on_delta: Optional[Callable[[str], None]] = None,
+        answer_filter: Optional[Callable[[str], str]] = None,
+    ) -> LLMResult:
+        """流式调用（answer-mode 逐 token）。
+
+        content 增量经 on_delta 回调；`answer_filter(acc)->str` 可选，用于剔除只在
+        非工具步流式的脚手架（如 react 的 Thought:）。一旦检测到 tool_calls 即停止
+        逐字流式（工具步的推理不吐给用户）。返回的 LLMResult.message 为鸭子类型
+        （content + tool_calls + reasoning_content=None），可无缝喂给 react_loop 下游。
+        """
+        import types as _types
+
+        actual_model = model or get_model_for_role(role or "react_main")
+        kwargs: dict = {
+            "model": actual_model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            kwargs["tools"] = tools
+        _eb = thinking_extra_body(actual_model, enable_thinking)
+        if _eb:
+            kwargs["extra_body"] = _eb
+
+        client = self._get_client().with_options(timeout=timeout)
+        retries = DEFAULT_MAX_RETRIES if max_retries is None else max_retries
+        stream = call_with_retry(
+            lambda: client.chat.completions.create(**kwargs),
+            max_retries=retries, on_retry=on_retry,
+        )
+
+        acc_content = ""
+        tool_slots: dict = {}
+        is_tool = False
+        emitted = 0  # 已通过 on_delta 吐出的"答案部分"长度
+        pt = ct = 0
+        finish_reason = "stop"
+
+        for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            if usage:
+                pt = getattr(usage, "prompt_tokens", 0) or 0
+                ct = getattr(usage, "completion_tokens", 0) or 0
+            if not getattr(chunk, "choices", None):
+                continue
+            ch0 = chunk.choices[0]
+            if getattr(ch0, "finish_reason", None):
+                finish_reason = ch0.finish_reason
+            delta = ch0.delta
+            if getattr(delta, "tool_calls", None):
+                is_tool = True  # 工具步：停止逐字流式（推理不吐给用户）
+                for tc in delta.tool_calls:
+                    slot = tool_slots.setdefault(
+                        tc.index, {"id": None, "type": "function", "name": "", "args": ""})
+                    if getattr(tc, "id", None):
+                        slot["id"] = tc.id
+                    if getattr(tc, "type", None):
+                        slot["type"] = tc.type
+                    fn = getattr(tc, "function", None)
+                    if fn:
+                        if getattr(fn, "name", None):
+                            slot["name"] += fn.name
+                        if getattr(fn, "arguments", None):
+                            slot["args"] += fn.arguments
+            piece = getattr(delta, "content", None)
+            if piece:
+                acc_content += piece
+                if not is_tool and on_delta is not None:
+                    ans = answer_filter(acc_content) if answer_filter else acc_content
+                    if len(ans) > emitted:
+                        try:
+                            on_delta(ans[emitted:])
+                        except Exception:  # noqa: BLE001
+                            pass
+                        emitted = len(ans)
+
+        tool_calls_objs = None
+        if tool_slots:
+            tool_calls_objs = [
+                _types.SimpleNamespace(
+                    id=s["id"], type=s["type"],
+                    function=_types.SimpleNamespace(name=s["name"], arguments=s["args"]),
+                )
+                for _, s in sorted(tool_slots.items())
+            ]
+        msg = _types.SimpleNamespace(
+            content=(acc_content or None), tool_calls=tool_calls_objs, reasoning_content=None,
+        )
+        logger.info("LLM 流式调用完成 model=%s tokens(in=%d out=%d) tool_calls=%s",
+                    actual_model, pt, ct, bool(tool_calls_objs))
+        return LLMResult(
+            content=acc_content or "", prompt_tokens=pt, completion_tokens=ct,
+            finish_reason=finish_reason, reasoning_content=None, message=msg,
+        )
+
 
 # 默认单例：全仓文本调用共享（provider 唯一真源 = MODEL_CONFIG）
 GATEWAY = LLMGateway()

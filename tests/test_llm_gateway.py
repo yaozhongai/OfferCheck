@@ -80,3 +80,62 @@ def test_no_retry_on_empty_when_disabled():
     r = g.complete([{"role": "user", "content": "hi"}], model="m", retry_on_empty=False)
     assert r.content == ""
     assert len(fake.calls) == 1
+
+
+# ── stream() 流式（评审 3.1b）——用假 chunk 迭代器，不发网络 ──
+
+class _StreamClient:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def with_options(self, **kw):
+        return self
+
+    @property
+    def chat(self):
+        return SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: iter(self._chunks)))
+
+
+def _chunk(content=None, tcs=None, finish=None, usage=None):
+    delta = SimpleNamespace(content=content, tool_calls=tcs)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish)], usage=usage)
+
+
+def _stream_gateway(chunks):
+    g = LLMGateway()
+    g._client = _StreamClient(chunks)
+    return g
+
+
+def test_stream_text_emits_deltas():
+    chunks = [
+        _chunk(content="Hello "),
+        _chunk(content="world"),
+        _chunk(finish="stop", usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3)),
+    ]
+    deltas = []
+    r = _stream_gateway(chunks).stream(
+        [{"role": "user", "content": "hi"}], model="m", on_delta=lambda t: deltas.append(t))
+    assert r.content == "Hello world"
+    assert "".join(deltas) == "Hello world"
+    assert r.prompt_tokens == 2 and r.completion_tokens == 3
+    assert r.tool_calls is None
+
+
+def test_stream_tool_calls_accumulate_and_dont_emit():
+    def _tc(index, id=None, name=None, args=None):
+        return SimpleNamespace(index=index, id=id, type="function",
+                               function=SimpleNamespace(name=name, arguments=args))
+    chunks = [
+        _chunk(tcs=[_tc(0, id="call_1", name="web_search", args='{"in')]),
+        _chunk(tcs=[_tc(0, args='put":"x"}')]),
+        _chunk(finish="tool_calls", usage=SimpleNamespace(prompt_tokens=5, completion_tokens=7)),
+    ]
+    deltas = []
+    r = _stream_gateway(chunks).stream(
+        [{"role": "user", "content": "hi"}], model="m", on_delta=lambda t: deltas.append(t))
+    assert r.tool_calls is not None and len(r.tool_calls) == 1
+    assert r.tool_calls[0].function.name == "web_search"
+    assert r.tool_calls[0].function.arguments == '{"input":"x"}'
+    assert r.tool_calls[0].id == "call_1"
+    assert deltas == []  # 工具步不逐字流式
