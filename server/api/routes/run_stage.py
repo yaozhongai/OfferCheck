@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 
 from server.api.schemas import RunStageRequest, RunStageResponse
 from server.api.prompt_assembly import resolve_task_input
+from server.trace_store.recorder import TraceRecorder, new_trace_id
 from server.api.deps import get_config
 from server.security import (
     enforce_run_quota, validate_image_path, clamp_run_limits, RUN_CONCURRENCY,
@@ -112,8 +113,11 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
     # 结构化会话字段 → 引擎任务串（评审 3.4）；stage_router 与 execute 共用同一串，
     # [追问/补充信息] 标记契约不破。
     task_input = resolve_task_input(request)
-    logger.info("run_stage/stream 请求 stage=%s input_len=%d",
-                request.stage, len(task_input))
+    # 同源轨迹持久化（评审 3.3）：一次 run 一个 trace_id + recorder（缓冲，结束落盘）
+    trace_id = new_trace_id()
+    recorder = TraceRecorder(trace_id, stage=request.stage)
+    logger.info("run_stage/stream 请求 stage=%s input_len=%d trace_id=%s",
+                request.stage, len(task_input), trace_id)
 
     event_q: "queue.Queue[dict]" = queue.Queue()
     _SENTINEL = {"type": "__end__"}
@@ -173,8 +177,12 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
         loop = asyncio.get_running_loop()
-        # 起始事件，让前端立刻有反馈
-        yield f"data: {json.dumps({'type': 'started', 'stage': request.stage}, ensure_ascii=False)}\n\n"
+        # 起始事件，让前端立刻有反馈；trace_id additive 透出供关联持久化轨迹
+        started_evt = {"type": "started", "stage": request.stage, "trace_id": trace_id}
+        recorder.record(started_evt)
+        yield f"data: {json.dumps(started_evt, ensure_ascii=False)}\n\n"
+        final_success = None
+        final_latency = None
         while True:
             try:
                 # 带超时的 get：每 20s 若无事件则发一次 SSE keepalive 注释，
@@ -185,10 +193,18 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
                 continue
             if evt.get("type") == "__end__":
                 break
+            # 同源持久化（评审 3.3）：落库的就是发给浏览器的同一条事件（best-effort，
+            # 缓冲不落盘、绝不打断流）。终止事件顺带抓 success/latency 供 finalize 摘要。
+            recorder.record(evt)
+            if evt.get("type") in ("done", "error"):
+                final_success = evt.get("success")
+                final_latency = evt.get("latency_ms")
             try:
                 yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
             except (TypeError, ValueError) as exc:
                 logger.warning("事件序列化失败 type=%s: %s", evt.get("type"), exc)
+        # 流结束：整条 trace 单次落盘（OTel JSON）
+        recorder.finalize(success=final_success, latency_ms=final_latency)
 
     return StreamingResponse(
         _event_stream(),

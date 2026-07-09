@@ -1,88 +1,45 @@
-"""
-Trace 查询 API — 提供前端调试和查询接口
+"""Trace 查询 API（评审 3.3：双轨合一）。
+
+服务 `TraceRecorder` 落盘的 **OTel-GenAI 对齐** trace（`data/traces/<trace_id>.json`）——
+与 `run_stage/stream` 发给浏览器的 SSE 事件**同源**、同一 typed schema
+（`nexa_agent/trace/events.py`）。
+
+历史注：本路由此前读 LangGraph 时代的 `server/trace_store/{service,store,sse}.py` +
+`nexa_agent/trace/schema.py`（那套 typed schema 与现役事件不符、从未接主链路，是
+被本次合并取代的「死轨」——已在 recorder 落地后废弃，待清理）。
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from fastapi import APIRouter, HTTPException
 
-from fastapi import APIRouter, Query
-from fastapi.responses import StreamingResponse
-
-from nexa_agent.trace.schema import TraceVisibility
-from server.trace_store.service import get_trace_events, build_timeline_items
-from server.trace_store.sse import subscribe_trace_events
+from server.trace_store.recorder import load_trace
 from nexa_agent.logger import get_logger
 
 logger = get_logger("api_trace")
 router = APIRouter(prefix="/api/v0/trace", tags=["trace"])
 
 
-@router.get("/{trace_id}/events", summary="查询 Trace 事件")
-async def list_events(
-    trace_id: str,
-    after_seq: Optional[int] = Query(None, description="断线重连起始 seq"),
-    limit: int = Query(200, ge=1, le=500),
-):
-    """查询某次请求的所有 Trace 事件"""
-    events = get_trace_events(trace_id, after_seq=after_seq, limit=limit)
+@router.get("/{trace_id}", summary="查询整条持久化 trace（OTel-GenAI JSON）")
+async def get_trace(trace_id: str):
+    """返回一次 run 的完整轨迹：resource 属性 + spans（每 span 带 gen_ai.* /
+    openinference.span.kind 属性）+ usage / verdict 摘要。不存在则 404。"""
+    doc = load_trace(trace_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"trace 不存在或已过期: {trace_id}")
+    return doc
+
+
+@router.get("/{trace_id}/events", summary="查询 trace 的事件（spans）列表")
+async def list_events(trace_id: str):
+    """只取 spans 列表（每条含 seq / type / timestamp / attributes / 原始事件）。"""
+    doc = load_trace(trace_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"trace 不存在或已过期: {trace_id}")
     return {
         "trace_id": trace_id,
-        "events": [
-            {
-                "seq": e.seq,
-                "event_type": e.event_type.value,
-                "event_status": e.event_status.value,
-                "node_name": e.node_name,
-                "title": e.title,
-                "message": e.message,
-                "input_summary": e.input_summary,
-                "output_summary": e.output_summary,
-                "payload": e.payload,
-                "duration_ms": e.duration_ms,
-                "event_level": e.event_level.value,
-                "error_type": e.error_type,
-                "error_message": e.error_message,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-            for e in events
-        ],
+        "stage": doc.get("stage"),
+        "usage": doc.get("usage"),
+        "verdict": doc.get("verdict"),
+        "events": doc.get("spans", []),
     }
-
-
-@router.get("/{trace_id}/timeline", summary="前端时间线")
-async def timeline(trace_id: str):
-    """获取聚合后的前端时间线"""
-    items = build_timeline_items(trace_id)
-    return {
-        "trace_id": trace_id,
-        "items": [
-            {
-                "node_name": i.node_name,
-                "title": i.title,
-                "status": i.status.value,
-                "duration_ms": i.duration_ms,
-                "event_count": len(i.events),
-                # 取最近一条 event 的 message / output_summary
-                "message": i.events[-1].message if i.events else None,
-                "output_summary": i.events[-1].output_summary if i.events else None,
-            }
-            for i in items
-        ],
-    }
-
-
-@router.get("/{trace_id}/stream", summary="SSE 事件流")
-async def stream_events(
-    trace_id: str,
-    after_seq: Optional[int] = Query(None),
-):
-    """SSE 实时推送 Trace 事件"""
-    return StreamingResponse(
-        subscribe_trace_events(trace_id, after_seq=after_seq),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
