@@ -339,18 +339,23 @@ class VerifierAgent:
                     evidence: Optional[dict] = None) -> VerdictResult:
         """用 LLM 评估来源可信度 + （有 evidence 时）内容 entailment 核查"""
         # 构建精简的核查 prompt。有检索正文摘录的事实附上摘录，供判断「内容是否支持断言」。
+        # 控体量（评审 2.2 修）：GMI 上大 prompt 偶发返回空 content——摘录 ≤300 字、
+        # 最多给 4 条事实附摘录，把总 prompt 压在安全区（实测 4k 字符可用、9k 字符会空返回）。
+        _MAX_ENTAIL = 4
+        _EXCERPT_CHARS = 300
         facts_text = ""
         entailment_idxs: list[int] = []  # 附了正文摘录、需判 supported 的事实序号
         for i, f in enumerate(facts, 1):
             facts_text += (
                 f"[{i}] 事实: {f['fact'][:200]}\n"
-                f"    来源: {f['source'][:300]}\n"
+                f"    来源: {f['source'][:150]}\n"
                 f"    自评: {f['confidence']}\n"
             )
-            excerpt = _match_evidence(_source_domain(f.get("source", "")), evidence or {})
-            if excerpt:
-                entailment_idxs.append(i)
-                facts_text += f"    已检索到该来源的正文摘录（用于核对断言是否属实）: {excerpt[:700]}\n"
+            if len(entailment_idxs) < _MAX_ENTAIL:
+                excerpt = _match_evidence(_source_domain(f.get("source", "")), evidence or {})
+                if excerpt:
+                    entailment_idxs.append(i)
+                    facts_text += f"    已检索到该来源的正文摘录（核对断言是否属实）: {excerpt[:_EXCERPT_CHARS]}\n"
             facts_text += "\n"
 
         if stage and ("stage4" in stage or "stage3" in stage):
@@ -456,9 +461,16 @@ class VerifierAgent:
         if _eb:
             kwargs["extra_body"] = _eb
 
-        # 瞬时错误重试（评审 1.9）：GMI 抖动时先自愈，避免直接落到 fail-open 兜底
-        response = call_with_retry(lambda: client.chat.completions.create(**kwargs))
-        return response.choices[0].message.content or ""
+        # 瞬时错误重试（评审 1.9）+ 空响应重试（评审 2.2：GMI 大 prompt 偶发返回空 content，
+        # 非异常、finish=stop，call_with_retry 抓不到——这里显式再试一次）
+        for _attempt in range(2):
+            response = call_with_retry(lambda: client.chat.completions.create(**kwargs))
+            content = response.choices[0].message.content or ""
+            if content.strip():
+                return content
+            logger.warning("Verifier LLM 返回空 content（finish=%s），重试 (%d/1)",
+                           getattr(response.choices[0], "finish_reason", "?"), _attempt + 1)
+        return ""
 
     def _parse_response(self, text: str) -> VerdictResult:
         """兼容旧格式 {"passed": ..., "reason": ..., "feedback": ...}"""

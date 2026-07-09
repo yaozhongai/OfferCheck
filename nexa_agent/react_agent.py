@@ -1219,7 +1219,8 @@ def react_loop(
                               for d in _BARE_DOMAIN_RE.findall(tool_args)}
                     _excerpt = observation[:1500]
                     for _d in _doms:
-                        if _d and _d not in evidence_registry and len(evidence_registry) < 20:
+                        # 需含点（过滤 markdown 加粗残留 "**" 之类的伪域名）
+                        if _d and "." in _d and _d not in evidence_registry and len(evidence_registry) < 20:
                             evidence_registry[_d] = _excerpt
 
                 # 信用分配
