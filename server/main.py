@@ -27,8 +27,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from server.api.deps import (
     HealthResponse,
     get_config,
-    get_extraction_pipeline,
-    get_llm_client,
     get_long_term_memory,
     get_short_term_memory,
     reset_all,

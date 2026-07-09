@@ -46,10 +46,10 @@ except ImportError:
 from nexa_agent.logger import get_logger, start_run_log, stop_run_log
 from nexa_agent.react_agent import react_loop, LLM_API_KEY
 from nexa_agent.memory import ReflexionMemory, ReflectionEntry, _jaccard_similarity
-from nexa_agent.evaluator import Evaluator, EvalResult, create_evaluator
+from nexa_agent.evaluator import create_evaluator
 from nexa_agent.verifier import VerifierAgent, should_trigger_verifier
 from nexa_agent.config import (
-    REFLEXION_CONFIG, REACT_CONFIG, MEMORY_CONFIG, PATH_CONFIG, get_config_summary,
+    REFLEXION_CONFIG, REACT_CONFIG, PATH_CONFIG, get_config_summary,
 )
 from nexa_agent.llm_gateway import complete as llm_complete
 

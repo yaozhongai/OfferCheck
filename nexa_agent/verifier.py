@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -68,32 +67,6 @@ class VerdictResult:
         return self.status != "failed"
 
 
-@dataclass
-class OfferVerdict:
-    """OfferCheck 阶段裁定的结构化解析结果（供 server/前端裁定卡片渲染）
-
-    对应 stage prompt 要求 Agent 输出的标签体系：
-        [Verdict] 靠谱 / 存疑 / 大概率有坑 —— 理由
-        [Fact] / [Source] / [Confidence]  （可多条，复用事实核查解析）
-        [RedFlag] 红旗（可多条）
-        [NeedUserConfirm] 需用户自行确认事项（可多条）
-    """
-    verdict: str = ""                 # 裁定结论原文
-    verdict_level: str = "unknown"    # 归一化: reliable | suspicious | likely_scam | unknown
-    facts: list[dict] = field(default_factory=list)   # [{fact, source, confidence}]
-    red_flags: list[str] = field(default_factory=list)
-    need_user_confirm: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            "verdict": self.verdict,
-            "verdict_level": self.verdict_level,
-            "facts": self.facts,
-            "red_flags": self.red_flags,
-            "need_user_confirm": self.need_user_confirm,
-        }
-
-
 # ==========================================================================
 # 事实提取
 # ==========================================================================
@@ -127,41 +100,6 @@ def _match_verdict_keywords(text: str) -> str:
        any(k in t for k in ("reliable", "legit", "trustworthy", "safe")):
         return "reliable"
     return "unknown"
-
-
-def _parse_tag_list(answer: str, tag: str) -> list[str]:
-    """提取某个标签的所有出现（每行一条），过滤「无」等空占位"""
-    items = []
-    for m in re.finditer(rf"\[{tag}\]\s*(.*?)(?:\n|$)", answer, re.IGNORECASE):
-        val = m.group(1).strip()
-        if val and val not in ("无", "None", "N/A", "-", "（无）", "(无)"):
-            items.append(val)
-    return items
-
-
-def parse_offer_verdict(answer: str) -> OfferVerdict:
-    """从 Agent 的 Final Answer 中解析 OfferCheck 结构化裁定
-
-    复用 `_parse_facts_from_output` 抽取 [Fact]/[Source]/[Confidence]，
-    再补充解析 [Verdict]/[RedFlag]/[NeedUserConfirm]。这样裁定输出与
-    既有的事实核查共用同一套结构化协议。
-
-    Args:
-        answer: Agent 的 Final Answer 文本
-
-    Returns:
-        OfferVerdict（无对应标签时字段为空，不抛错）
-    """
-    verdict_match = re.search(r"\[Verdict\]\s*(.*?)(?:\n|$)", answer, re.IGNORECASE)
-    verdict_text = verdict_match.group(1).strip() if verdict_match else ""
-
-    return OfferVerdict(
-        verdict=verdict_text,
-        verdict_level=_classify_verdict_level(verdict_text) if verdict_text else "unknown",
-        facts=_parse_facts_from_output(answer),
-        red_flags=_parse_tag_list(answer, "RedFlag"),
-        need_user_confirm=_parse_tag_list(answer, "NeedUserConfirm"),
-    )
 
 
 # ── entailment 内容核查辅助（评审 2.2）──
@@ -223,17 +161,12 @@ def _parse_facts_from_output(answer: str) -> list[dict]:
     # 如果标准格式没有匹配到，尝试从 URL 引用中提取
     if not facts:
         urls = re.findall(r'https?://[^\s\)\]>,"\']+', answer)
-        if urls:
-            last_url = urls[-1] if urls else ""
-            # 尝试在 URL 附近找数字/数据
-            for url in urls:
-                idx = answer.find(url)
-                context = answer[max(0, idx - 150):idx + len(url) + 50]
-                facts.append({
-                    "fact": f"数据来自 {url}",
-                    "source": url,
-                    "confidence": "Unstated",
-                })
+        for url in urls:
+            facts.append({
+                "fact": f"数据来自 {url}",
+                "source": url,
+                "confidence": "Unstated",
+            })
 
     return facts
 
@@ -447,23 +380,6 @@ class VerifierAgent:
             timeout=30.0, retry_on_empty=True,
         )
         return result.content
-
-    def _parse_response(self, text: str) -> VerdictResult:
-        """兼容旧格式 {"passed": ..., "reason": ..., "feedback": ...}"""
-        json_match = re.search(r"\{[^}]+\}", text, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(0))
-                if not data.get("passed", True):
-                    return VerdictResult(
-                        status="failed",
-                        reason=data.get("reason", "来源不可靠"),
-                        feedback=data.get("feedback", "请从更权威的来源重新搜索数据。"),
-                    )
-                return VerdictResult(status="verified", reason=data.get("reason", ""))
-            except json.JSONDecodeError:
-                pass
-        return VerdictResult(status="unverified", reason="Verifier 无法解析，默认放行")
 
     def _parse_cove_response(self, text: str, facts: list[dict],
                              entailment_idxs: Optional[list] = None) -> VerdictResult:

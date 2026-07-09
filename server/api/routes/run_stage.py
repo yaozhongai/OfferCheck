@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/v0", tags=["run_stage"])
 def _build_agent(request: RunStageRequest):
     """按请求参数构造核心引擎实例（run_stage 与 stream 共用）。"""
     from nexa_agent.reflexion_agent import ReflexionReActAgent
-    from nexa_agent.config import REFLEXION_CONFIG, REACT_CONFIG
+    from nexa_agent.config import REFLEXION_CONFIG
 
     # 服务端强制上限（忽略客户端传入的超大值，防放大 GMI 花费）
     max_steps, max_trials = clamp_run_limits(request.max_steps, request.max_trials)

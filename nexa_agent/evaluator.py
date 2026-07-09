@@ -13,7 +13,7 @@ import json
 import os
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 # 加载 .env

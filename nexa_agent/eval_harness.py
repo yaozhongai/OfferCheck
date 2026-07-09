@@ -48,7 +48,7 @@ except ImportError:
 
 from nexa_agent.logger import get_logger
 from nexa_agent.config import (
-    REACT_CONFIG, REFLEXION_CONFIG, get_config_summary, get_model_for_role,
+    REACT_CONFIG, REFLEXION_CONFIG, get_model_for_role,
 )
 
 logger = get_logger("eval_harness")

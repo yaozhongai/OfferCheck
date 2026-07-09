@@ -36,7 +36,6 @@ import argparse
 import os
 import re
 import sys
-import time
 from typing import Callable, List, Optional, Tuple
 
 # 加载 .env
@@ -1250,7 +1249,6 @@ def _compute_step_utility(
         - 其他默认: 0.0
     """
     obs_lower = observation.lower()
-    tool_lower = tool_name.lower()
     args_clean = tool_args.strip()
     has_error = observation.startswith("[错误]") or observation.lower().startswith("[error]")
     has_no_result = any(kw in obs_lower for kw in ["未找到", "无结果", "no result", "not found"])
@@ -1452,17 +1450,6 @@ def _mid_trajectory_check(
             )
 
     return None
-
-
-def _build_memory_prefix(memories: list[str]) -> str:
-    """构建记忆注入前缀（保留向后兼容，但不再推荐使用）"""
-    if not memories:
-        return ""
-    prefix = "【重要提醒：你之前在类似任务中犯过以下错误，务必避免重蹈覆辙】\n\n"
-    for i, mem in enumerate(memories, 1):
-        prefix += f"教训 {i}: {mem}\n\n"
-    prefix += "---\n\n"
-    return prefix
 
 
 def _build_memory_system_message(memories: list[str]) -> Optional[str]:
