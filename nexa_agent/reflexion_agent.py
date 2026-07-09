@@ -967,12 +967,16 @@ def main():
     if not args.quiet:
         print(get_config_summary())
 
-    # 执行
+    # 执行。react 内循环的控制台进度由 render_react_event 驱动（评审 3.5：引擎不再
+    # print，CLI 自渲染）；reflexion 外循环的 Trial/记忆/verifier 进度仍走本模块的
+    # verbose print——两者事件集不相交，不重复。
+    from nexa_agent.react_agent import render_react_event
     result = agent.execute(
         task=task_text,
         image_path=image_path,
         verbose=not args.quiet,
         stage=args.stage,
+        on_event=(render_react_event if not args.quiet else None),
     )
 
     # 输出结果

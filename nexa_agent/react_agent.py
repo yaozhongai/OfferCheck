@@ -36,7 +36,8 @@ import argparse
 import os
 import re
 import sys
-from typing import Callable, List, Optional, Tuple
+from dataclasses import dataclass, field, fields as _dc_fields
+from typing import Any, Callable, List, Optional, Tuple
 
 # 加载 .env
 try:
@@ -88,6 +89,50 @@ MAX_SUBMIT_RETRY_NAGS = 2
 # LLM 调用统一走 GATEWAY（评审 3.1b）；此处仅保留 trace 事件里引用的重试次数常量。
 from nexa_agent.util.llm_retry import DEFAULT_MAX_RETRIES as LLM_MAX_RETRIES
 from nexa_agent.util.injection import scan_injection
+
+
+# ==========================================================================
+# react_loop 返回结果（评审 3.5：return dict → dataclass）
+# ==========================================================================
+
+@dataclass
+class ReactResult:
+    """react_loop 的类型化返回。
+
+    此前每个 return 点手工拼 dict，容易漏字段——SPEC「轨迹截断补漏字段」那类事故的
+    根源（早前 llm_error 兜底路径漏了 source_attribution/evidence_registry/verdict，
+    下游 `.get()` 静默拿到 None）。改用 dataclass 后**所有字段恒有默认值**，任何 return
+    点都不会漏。为零风险迁移，保留 dict 只读兼容（`r["k"]` / `r.get` / `"k" in r`），
+    既有消费方（reflexion_agent / 测试）无需改动，新代码走属性访问。
+    """
+    answer: str
+    trajectory: str = ""
+    steps_used: int = 0
+    terminated_reason: str = ""
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    step_utilities: list = field(default_factory=list)
+    critical_step: Optional[dict] = None
+    source_attribution: Optional[dict] = None
+    action_history: list = field(default_factory=list)
+    seen_urls: list = field(default_factory=list)
+    successful_retrievals: int = 0
+    evidence_registry: dict = field(default_factory=dict)
+    verdict: Optional[dict] = None
+
+    # ── dict 只读兼容（迁移期）──
+    def __getitem__(self, key: str) -> Any:
+        try:
+            return getattr(self, key)
+        except AttributeError as exc:  # noqa: BLE001
+            raise KeyError(key) from exc
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and any(f.name == key for f in _dc_fields(self))
+
 
 # System Prompt 路径
 _PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
@@ -502,6 +547,62 @@ def _is_verdict_answer(final_answer: str) -> bool:
     return any(lbl in head for lbl in _VERDICT_LABELS)
 
 
+# ==========================================================================
+# 可单测的 pipeline 策略（评审 3.5：从 react_loop 闭包抽出，显式入参、纯函数）
+# ==========================================================================
+
+def should_gate_block(
+    final_answer: str, *, stage: Optional[str], answer_mode: bool,
+    successful_retrievals: int, evidence_gate_nags: int,
+    max_nags: int = MAX_EVIDENCE_GATE_NAGS,
+) -> bool:
+    """强制取证 gate 决策：裁定/事实型输出但零成功检索 → 应拦截（额度内）。
+
+    此前是 react_loop 的闭包（读循环局部量），抽成纯函数后可脱离主循环单测。
+    answer-mode 的非裁定对话式回答基于上文已取证结论作答，不强制新检索。
+    """
+    if answer_mode and not _is_verdict_answer(final_answer):
+        return False
+    return (
+        _answer_requires_evidence(final_answer, stage)
+        and successful_retrievals == 0
+        and evidence_gate_nags < max_nags
+    )
+
+
+# 本地/内网地址不是真实来源（相对 URL、开发环境自引用等），过滤掉避免噪声
+_LOCAL_SOURCE_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+
+
+def build_structured_sources(
+    final_answer: str, seen_urls: set[str], *, limit: int = 12,
+) -> list[dict]:
+    """结构化来源列表：模型在答案中引用的 URL 优先，再用 seen_urls 回填并去重，
+    每条标注 verified（是否在真实检索记录中命中）。上限 limit 条。
+
+    此前是 react_loop 的闭包（读 seen_urls）；抽成纯函数后可单测。
+    """
+    seen_norm = {_normalize_url(u) for u in seen_urls}
+    out: list[dict] = []
+    chosen: set[str] = set()
+
+    def _add(u: str) -> None:
+        nu = _normalize_url(u)
+        dom = _url_domain(u)
+        if not dom or nu in chosen or len(out) >= limit:
+            return
+        if any(dom == h or dom.startswith(h + ":") for h in _LOCAL_SOURCE_HOSTS):
+            return
+        chosen.add(nu)
+        out.append({"url": u, "domain": dom, "verified": nu in seen_norm})
+
+    for u in _URL_RE.findall(final_answer):   # 模型引用的（含可能未验证的）
+        _add(u)
+    for u in sorted(seen_urls):               # 真实检索过的，回填保证非空
+        _add(u)
+    return out
+
+
 def _assistant_msg_to_dict(msg) -> dict:
     """把 SDK 返回的 assistant message 转为可回传的 dict，保留 reasoning_content。
 
@@ -670,7 +771,7 @@ def react_loop(
     on_event: Optional[Callable[[dict], None]] = None,
     answer_mode: bool = False,
     output_lang: Optional[str] = None,
-) -> dict:
+) -> ReactResult:
     """ReAct 主循环 — 基于原生 tool calling
 
     LLM 通过 function calling API 调用工具，不再依赖正则解析。
@@ -761,53 +862,18 @@ def react_loop(
     # 跨步硬缓存：tool_name + normalized_args → observation（去重，防冗余调用）
     _tool_cache: dict[str, str] = {}
 
-    print(f"\n{'='*60}")
-    print(f"🚀 ReAct Agent 启动 (tool calling 模式)")
-    if image_path:
-        print(f"🖼️  附带图片: {image_path}")
-    print(f"🔧 可用工具: {', '.join(TOOLS.keys())}")
-    print(f"🤖 推理模型: 首步={get_model_for_role('react_first')}, 后续={get_model_for_role('react_main')}")
-    print(f"📏 最大步数: {max_steps}")
-    print(f"{'='*60}\n")
+    logger.info("ReAct 启动: image=%s tools=%d 首步=%s 后续=%s max_steps=%d",
+                bool(image_path), len(TOOLS),
+                get_model_for_role("react_first"), get_model_for_role("react_main"), max_steps)
 
     clear_session_extracts()
 
     def _gate_should_block(final_answer: str) -> bool:
-        """强制取证 gate：裁定/事实型输出但尚无成功检索 → 应拦截（额度内）。"""
-        # answer-mode 的非裁定对话式回答：基于上文已取证结论作答，不强制新检索
-        if answer_mode and not _is_verdict_answer(final_answer):
-            return False
-        return (
-            _answer_requires_evidence(final_answer, stage)
-            and successful_retrievals == 0
-            and evidence_gate_nags < MAX_EVIDENCE_GATE_NAGS
+        # 委托抽出的纯策略（读当前循环量：successful_retrievals / evidence_gate_nags）
+        return should_gate_block(
+            final_answer, stage=stage, answer_mode=answer_mode,
+            successful_retrievals=successful_retrievals, evidence_gate_nags=evidence_gate_nags,
         )
-
-    def _build_structured_sources(final_answer: str) -> list[dict]:
-        """结构化来源列表：模型在答案中引用的 URL 优先，再用 seen_urls 回填并去重，
-        每条标注 verified（是否在真实检索记录中命中）。上限 12 条。"""
-        seen_norm = {_normalize_url(u) for u in seen_urls}
-        out: list[dict] = []
-        chosen: set[str] = set()
-
-        # 本地/内网地址不是真实来源（相对 URL、开发环境自引用等），过滤掉避免噪声
-        _LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
-
-        def _add(u: str) -> None:
-            nu = _normalize_url(u)
-            dom = _url_domain(u)
-            if not dom or nu in chosen or len(out) >= 12:
-                return
-            if any(dom == h or dom.startswith(h + ":") for h in _LOCAL_HOSTS):
-                return
-            chosen.add(nu)
-            out.append({"url": u, "domain": dom, "verified": nu in seen_norm})
-
-        for u in _URL_RE.findall(final_answer):   # 模型引用的（含可能未验证的）
-            _add(u)
-        for u in sorted(seen_urls):               # 真实检索过的，回填保证非空
-            _add(u)
-        return out
 
     def _finalize(final_answer: str, reason: str = "final_answer",
                   summary_for_user: str = "", suggested_followups: Optional[list] = None,
@@ -821,8 +887,6 @@ def react_loop(
         if attribution["unverified"]:
             logger.warning("来源对账: %d/%d 条来源未验证（已标注）",
                            attribution["unverified"], attribution["total_sources"])
-            if verbose:
-                print(f"🔎 来源对账: {attribution['unverified']}/{attribution['total_sources']} 条来源未在检索记录中找到（已标注 ⚠️）")
         # AIS 联动降级（评审 2.1）：未验证占比 > 1/3 时把对账结果反哺到裁定
         # （靠谱→存疑，仅增加谨慎；有坑/存疑不弱化，只补置信受限说明）
         annotated, _ais_downgraded = apply_ais_confidence_downgrade(annotated, attribution, _lang)
@@ -836,37 +900,36 @@ def react_loop(
                 verdict = {**verdict,
                            "verdict": "存疑" if _lang != "en" else "Suspicious",
                            "verdict_level": "suspicious"}
-        print(f"\n✅ Final Answer:\n{annotated}")
         logger.info("ReAct 完成 step=%d final_answer_len=%d unverified=%d",
                     step_count, len(annotated), attribution["unverified"])
         # 结构化来源直传前端（问题5）：优先模型在答案里引用的 URL，再用真实检索过的
         # seen_urls 回填，保证只要有过检索就一定有稳定来源；verified=是否在检索记录中命中。
-        structured_sources = _build_structured_sources(final_answer)
+        structured_sources = build_structured_sources(final_answer, seen_urls)
         _emit("final_answer", step=step_count, answer=annotated, sources=structured_sources,
               summary_for_user=summary_for_user or "",
               suggested_followups=suggested_followups or [],
               verdict=verdict)
-        _print_summary(step_count, total_prompt_tokens, total_completion_tokens)
+        _log_summary(step_count, total_prompt_tokens, total_completion_tokens)
         _curation_step(verbose=verbose)
-        return {
-            "answer": annotated,
-            "trajectory": "\n".join(trajectory_parts),
-            "steps_used": step_count,
-            "terminated_reason": reason,
-            "total_prompt_tokens": total_prompt_tokens,
-            "total_completion_tokens": total_completion_tokens,
-            "step_utilities": step_utilities,
-            "critical_step": _find_critical_step(step_utilities),
-            "source_attribution": attribution,
+        return ReactResult(
+            answer=annotated,
+            trajectory="\n".join(trajectory_parts),
+            steps_used=step_count,
+            terminated_reason=reason,
+            total_prompt_tokens=total_prompt_tokens,
+            total_completion_tokens=total_completion_tokens,
+            step_utilities=step_utilities,
+            critical_step=_find_critical_step(step_utilities),
+            source_attribution=attribution,
             # 结构化行动日志：供 Evaluator 构建紧凑摘要，替代截断的 trajectory 文本
-            "action_history": list(action_history),
-            "seen_urls": list(seen_urls),
-            "successful_retrievals": successful_retrievals,
+            action_history=list(action_history),
+            seen_urls=list(seen_urls),
+            successful_retrievals=successful_retrievals,
             # entailment 证据（评审 2.2）：域名 → 检索正文摘录，供 Verifier 内容核实
-            "evidence_registry": dict(evidence_registry),
+            evidence_registry=dict(evidence_registry),
             # 结构化裁定（评审 3.2）：仅 submit_verdict 路径非空，additive 直传前端
-            "verdict": verdict,
-        }
+            verdict=verdict,
+        )
 
     def _gate_reprompt_msgs(content_or_note: str) -> None:
         """gate 拦截时向对话注入"先取证"提示（就地 append messages）。"""
@@ -899,8 +962,6 @@ def react_loop(
         # 动态升级：连续 N 步未发 tool_calls → 切备援模型
         if consecutive_no_toolcall >= DYNAMIC_UPGRADE_THRESHOLD:
             step_model = get_model_for_role("tool_call_upgrade")
-            if verbose:
-                print(f"⚡ 动态升级: 连续 {consecutive_no_toolcall} 步未调用工具 → {step_model}")
             logger.info(
                 "Step %d: 动态升级至 upgrade 层 model=%s (consecutive_no_toolcall=%d)",
                 step_count, step_model, consecutive_no_toolcall,
@@ -912,7 +973,6 @@ def react_loop(
 
         enable_thinking = (step_count == 1) or (last_tool_success is False)
 
-        print(f"--- Step {step_count}/{max_steps} [模型: {step_model}] ---")
         logger.info("Step %d: 调用 LLM (model=%s thinking=%s, history=%d messages)",
                      step_count, step_model, "on" if enable_thinking else "off", len(messages))
         _emit("step_start", step=step_count, max_steps=max_steps, model=step_model)
@@ -944,21 +1004,20 @@ def react_loop(
             total_completion_tokens += completion_tok
         except Exception as exc:
             logger.error("LLM 调用失败 step=%d: %s", step_count, exc, exc_info=True)
-            print(f"\n❌ LLM 调用失败: {exc}")
             trajectory = "\n".join(trajectory_parts) if trajectory_parts else "(空轨迹)"
-            return {
-                "answer": f"[错误] 推理模型调用失败 (step {step_count}): {exc}",
-                "trajectory": trajectory,
-                "steps_used": step_count,
-                "terminated_reason": "llm_error",
-                "total_prompt_tokens": total_prompt_tokens,
-                "total_completion_tokens": total_completion_tokens,
-                "step_utilities": step_utilities,
-                "critical_step": _find_critical_step(step_utilities),
-                "action_history": list(action_history),
-                "seen_urls": list(seen_urls),
-                "successful_retrievals": successful_retrievals,
-            }
+            return ReactResult(
+                answer=f"[错误] 推理模型调用失败 (step {step_count}): {exc}",
+                trajectory=trajectory,
+                steps_used=step_count,
+                terminated_reason="llm_error",
+                total_prompt_tokens=total_prompt_tokens,
+                total_completion_tokens=total_completion_tokens,
+                step_utilities=step_utilities,
+                critical_step=_find_critical_step(step_utilities),
+                action_history=list(action_history),
+                seen_urls=list(seen_urls),
+                successful_retrievals=successful_retrievals,
+            )
 
         msg = choice.message
         content = msg.content or ""
@@ -969,9 +1028,6 @@ def react_loop(
             # 先把 assistant message（含全部 tool_calls）加入历史
             # 转 dict 并保留 reasoning_content，否则 DeepSeek 推理模型下一轮报 400
             messages.append(_assistant_msg_to_dict(msg))
-
-            if content and verbose:
-                print(f"💭 Thought: {content[:200]}{'...' if len(content) > 200 else ''}")
 
             import json as _json
 
@@ -1021,8 +1077,6 @@ def react_loop(
                     evidence_gate_nags += 1
                     logger.warning("Step %d: submit_verdict 被 gate 拦截 (nag %d/%d)",
                                    step_count, evidence_gate_nags, MAX_EVIDENCE_GATE_NAGS)
-                    if verbose:
-                        print(f"🚧 强制取证 gate: submit_verdict 前尚无检索，已拦截 [{evidence_gate_nags}/{MAX_EVIDENCE_GATE_NAGS}]")
                     _emit("evidence_gate", step=step_count, reason="verdict_without_retrieval")
                     messages.append({
                         "role": "tool", "tool_call_id": verdict_tc.id,
@@ -1063,7 +1117,6 @@ def react_loop(
                         f"Action (parallel): {tool_name}({tool_args[:200]})"
                     )
 
-                print(f"🔧 Action: {tool_name}({tool_args[:100]}{'...' if len(tool_args) > 100 else ''})")
                 _emit("action", step=step_count, tool=tool_name, args=tool_args[:300],
                       thought=(content[:500] if tc is msg.tool_calls[0] and content else ""))
 
@@ -1134,7 +1187,6 @@ def react_loop(
                         "请据实记入裁定。\n--- 原始工具返回如下 ---\n" + observation
                     )
 
-                print(f"👁️  Observation: {observation[:300]}{'...' if len(observation) > 300 else ''}")
                 trajectory_parts.append(f"Observation: {observation[:500]}")
                 _emit("observation", step=step_count, tool=tool_name,
                       ok=last_tool_success, observation=observation[:600])
@@ -1155,8 +1207,6 @@ def react_loop(
             )
             if correction:
                 logger.info("Step %d: 中途纠偏触发 — %s", step_count, correction)
-                if verbose:
-                    print(f"⚡ 中途纠偏: {correction}")
                 _emit("correction", step=step_count, message=correction)
                 # 纠偏提示作为 user message 注入（不能追加到 tool response 里）
                 messages.append({
@@ -1178,8 +1228,6 @@ def react_loop(
                 "Step %d: 返回空内容且无 tool_calls（consecutive_no_toolcall=%d/%d）",
                 step_count, consecutive_no_toolcall, DYNAMIC_UPGRADE_THRESHOLD,
             )
-            if verbose:
-                print(f"⚠️  返回空内容 [{consecutive_no_toolcall}/{DYNAMIC_UPGRADE_THRESHOLD}]，提示继续")
             messages.append({
                 "role": "user",
                 "content": "请调用合适的工具继续调查，或直接给出你的结论。",
@@ -1203,8 +1251,6 @@ def react_loop(
                 "Step %d: 强制取证 gate 拦截 — 尚无成功检索却给出裁定 (nag %d/%d)",
                 step_count, evidence_gate_nags, MAX_EVIDENCE_GATE_NAGS,
             )
-            if verbose:
-                print(f"🚧 强制取证 gate: 你还没查证就下结论，已拦截 [{evidence_gate_nags}/{MAX_EVIDENCE_GATE_NAGS}]")
             _emit("evidence_gate", step=step_count, reason="no_retrieval_before_verdict")
             _gate_reprompt_msgs(content)
             last_tool_success = False
@@ -1215,7 +1261,6 @@ def react_loop(
 
     # 达到 max_steps：触发兜底汇总（不传 tools，强制纯文本回答）
     logger.warning("达到 max_steps=%d，触发兜底汇总", max_steps)
-    print(f"\n⚠️  达到最大步数 {max_steps}，触发兜底汇总...")
 
     fallback_prompt = (
         "你已经达到了最大步数限制。请基于以上所有信息，"
@@ -1239,27 +1284,27 @@ def react_loop(
         # 兜底答案统一走 _finalize：补上 AIS 来源对账 + structured_sources + final_answer
         # 事件——这是最可能证据不全的路径，此前手工拼 dict 反而绕过了接地层（评审 1.5）。
         final_answer = parsed["final_answer"] if parsed["final_answer"] else response_text.strip()
-        if not parsed["final_answer"] and verbose:
-            print(f"\n⚠️  兜底汇总未找到 Final Answer 标记，使用完整响应")
+        if not parsed["final_answer"]:
+            logger.info("兜底汇总未找到 Final Answer 标记，使用完整响应")
         return _finalize(final_answer, reason="max_steps")
 
     except Exception as exc:
         logger.error("兜底汇总 LLM 调用失败: %s", exc, exc_info=True)
         _curation_step(verbose=verbose)
         trajectory = "\n".join(trajectory_parts) if trajectory_parts else "(空轨迹)"
-        return {
-            "answer": f"[错误] 兜底汇总失败: {exc}",
-            "trajectory": trajectory,
-            "steps_used": step_count,
-            "terminated_reason": "llm_error",
-            "total_prompt_tokens": total_prompt_tokens,
-            "total_completion_tokens": total_completion_tokens,
-            "step_utilities": step_utilities,
-            "critical_step": _find_critical_step(step_utilities),
-            "action_history": list(action_history),
-            "seen_urls": list(seen_urls),
-            "successful_retrievals": successful_retrievals,
-        }
+        return ReactResult(
+            answer=f"[错误] 兜底汇总失败: {exc}",
+            trajectory=trajectory,
+            steps_used=step_count,
+            terminated_reason="llm_error",
+            total_prompt_tokens=total_prompt_tokens,
+            total_completion_tokens=total_completion_tokens,
+            step_utilities=step_utilities,
+            critical_step=_find_critical_step(step_utilities),
+            action_history=list(action_history),
+            seen_urls=list(seen_urls),
+            successful_retrievals=successful_retrievals,
+        )
 
 
 def _compute_step_utility(
@@ -1508,13 +1553,46 @@ def _build_memory_system_message(memories: list[str]) -> Optional[str]:
     )
 
 
-def _print_summary(steps: int, prompt_tokens: int, completion_tokens: int) -> None:
-    """打印执行摘要"""
-    print(f"\n{'='*60}")
-    print(f"📊 执行摘要: {steps} 步, "
-          f"输入 {prompt_tokens} tokens, 输出 {completion_tokens} tokens, "
-          f"合计 {prompt_tokens + completion_tokens} tokens")
-    print(f"{'='*60}")
+def _log_summary(steps: int, prompt_tokens: int, completion_tokens: int) -> None:
+    """记录执行摘要（评审 3.5：库代码走 logger，不直出 stdout）。"""
+    logger.info("执行摘要: %d 步, 输入 %d tokens, 输出 %d tokens, 合计 %d tokens",
+                steps, prompt_tokens, completion_tokens, prompt_tokens + completion_tokens)
+
+
+def render_react_event(evt: dict) -> None:
+    """把一条 react_loop 级事件渲染成控制台一行（评审 3.5：CLI 入口自渲染）。
+
+    引擎不再直接 print——`react_loop` 走 logger + on_event，控制台输出由 CLI 把本函数
+    挂成 on_event 回调驱动。**只渲染 react 内循环事件**；trial 级事件（trial_start /
+    verifier_* / usage …）留给 reflexion_agent 的 CLI 输出，避免重复。
+    """
+    t = evt.get("type")
+    if t == "step_start":
+        print(f"--- Step {evt.get('step')}/{evt.get('max_steps')} [模型: {evt.get('model')}] ---")
+    elif t == "action":
+        tool = evt.get("tool", "")
+        if tool == FINALIZE_TOOL:
+            return
+        thought = evt.get("thought") or ""
+        if thought:
+            print(f"💭 Thought: {thought[:200]}{'...' if len(thought) > 200 else ''}")
+        args = evt.get("args") or ""
+        print(f"🔧 Action: {tool}({args[:100]}{'...' if len(args) > 100 else ''})")
+    elif t == "observation":
+        obs = evt.get("observation") or ""
+        print(f"👁️  Observation: {obs[:300]}{'...' if len(obs) > 300 else ''}")
+    elif t == "evidence_gate":
+        print(f"🚧 强制取证 gate 拦截: {evt.get('reason', '')}")
+    elif t == "correction":
+        print(f"⚡ 中途纠偏: {evt.get('message', '')}")
+    elif t == "retry":
+        print(f"🔁 重试 LLM ({evt.get('attempt')}/{evt.get('max_attempts')}): {evt.get('error', '')}")
+    elif t == "injection_detected":
+        print(f"⚠️  注入检测 [{evt.get('tool')}]: {evt.get('patterns')}")
+    elif t == "ais_downgrade":
+        print(f"🔎 AIS 联动降级: {evt.get('unverified')}/{evt.get('total_sources')} 来源未验证，裁定已下调")
+    elif t == "final_answer":
+        print(f"\n✅ Final Answer:\n{evt.get('answer', '')}")
 
 
 # ==========================================================================
@@ -1586,17 +1664,12 @@ def _curation_step(verbose: bool = True) -> None:
                 extract = extracts[saved]  # 按顺序对应
                 try:
                     filepath = write_extract_to_disk(extract, fname)
-                    logger.info("策展: SAVE → %s", filepath)
-                    if verbose:
-                        print(f"📥 策展保存: {fname}.md ({len(extract.get('raw_content', ''))} 字符)")
+                    logger.info("策展: SAVE → %s (%d 字符)", filepath, len(extract.get("raw_content", "")))
                     saved += 1
                 except Exception as exc:
                     logger.error("策展写入失败 %s: %s", fname, exc)
 
-    if verbose and saved > 0:
-        print(f"📥 策展完成: 共保存 {saved}/{len(extracts)} 条\n")
-    elif verbose:
-        print(f"📥 策展完成: 无内容需保存 ({len(extracts)} 条均跳过)\n")
+    logger.info("策展完成: 保存 %d/%d 条", saved, len(extracts))
 
 
 # ==========================================================================
@@ -1672,19 +1745,21 @@ def main():
                 print(f"   也尝试过: {alt_path}")
                 sys.exit(1)
 
-    # 运行 ReAct 循环
+    # 运行 ReAct 循环。引擎不再 print——控制台进度由 CLI 把 render_react_event
+    # 挂成 on_event 回调驱动（评审 3.5：CLI 入口自渲染）。
     result = react_loop(
         user_query=args.query,
         image_path=image_path,
         max_steps=args.max_steps,
         verbose=not args.quiet,
+        on_event=(render_react_event if not args.quiet else None),
     )
 
-    # 提取答案（兼容新的 dict 返回格式）
-    answer = result["answer"] if isinstance(result, dict) else result
+    # react_loop 现返回 ReactResult（评审 3.5）
+    answer = result.answer
     if not args.quiet:
         print(f"\n{'='*60}")
-        print(f"📊 终止原因: {result.get('terminated_reason', 'N/A') if isinstance(result, dict) else 'N/A'}")
+        print(f"📊 终止原因: {result.terminated_reason}")
         print(f"{'='*60}")
 
     return answer
