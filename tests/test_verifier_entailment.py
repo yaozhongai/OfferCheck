@@ -41,9 +41,11 @@ def v():
 
 
 def test_misattribution_forces_failed(v):
+    # D3 校准后：只有「摘录直接矛盾」(contradicted) 才是真 misattribution、才强制驳回
     facts = [{"fact": "该页要求交押金", "source": "https://bytedance.com/jobs", "confidence": "High"}]
-    text = ('{"fact_verdicts":[{"index":1,"reliable":true,"supported":false,'
-            '"reason":"页面正文并无押金要求"}],"overall":"verified","reason":"来源可靠","feedback":""}')
+    text = ('{"fact_verdicts":[{"index":1,"reliable":true,"supported":"contradicted",'
+            '"reason":"页面正文明确说无需任何费用，与押金要求矛盾"}],'
+            '"overall":"verified","reason":"来源可靠","feedback":""}')
     res = v._parse_cove_response(text, facts, entailment_idxs=[1])
     assert res.status == "failed"           # 即使 LLM 说 verified，也被强制驳回
     assert res.unreliable_facts

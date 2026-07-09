@@ -132,6 +132,94 @@ def _match_evidence(source_domain: str, evidence: dict) -> str:
     return ""
 
 
+def _relevant_window(text: str, fact: str, size: int = 300) -> str:
+    """从正文摘录里截取与事实断言重叠度最高的 size 字窗口（评审 P0 D2）。
+
+    此前对长正文只取前 size 字——搜索列表头/页面导航区几乎不含断言，judge 必然「查无」
+    而误判 misattribution。改为按事实关键词在正文里滑窗打分，取命中最多的一段，让这
+    有限的 size 字真正围绕断言，把「内容核实」做到点子上。
+    """
+    if len(text) <= size:
+        return text
+    kws = set(re.findall(r"[a-zA-Z][a-zA-Z0-9]{2,}", fact.lower()))
+    for seg in re.findall(r"[一-鿿]{2,}", fact):  # CJK 双字 gram
+        for i in range(len(seg) - 1):
+            kws.add(seg[i:i + 2])
+    if not kws:
+        return text[:size]
+    tl = text.lower()
+    step = max(50, size // 4)
+    best_pos, best_score = 0, -1
+    for pos in range(0, len(text) - size + 1, step):
+        score = sum(tl.count(k, pos, pos + size) for k in kws)
+        if score > best_score:
+            best_score, best_pos = score, pos
+    if best_score <= 0:
+        return text[:size]
+    start = max(0, best_pos - size // 6)  # 给命中处一点前文
+    return text[start:start + size]
+
+
+# OfferCheck 调查证伪阶段：选岗(1)/沟通(3)/offer(4) 都是「证伪/查真」任务，媒体报道、
+# UGC 佐证、以及「多渠道查无」这类负面证据都是合法证据链（评审 P0 D4：此前只认 3/4，
+# stage1 选岗调研误落进通用严格分支 → reddit/反诈博客被判不可靠而误杀）。
+_OFFERCHECK_INVESTIGATION_STAGES = ("stage1", "stage3", "stage4")
+
+
+def _source_criteria(stage: Optional[str]) -> str:
+    """按 stage 返回来源可信度判断标准（评审 3.8 stage-aware + P0 D4）。"""
+    if stage and any(s in stage for s in _OFFERCHECK_INVESTIGATION_STAGES):
+        return """来源可信度判断标准（OfferCheck 调查证伪专用——选岗/沟通/offer）:
+- 官方网站/官方社交媒体（LinkedIn 官方账号/Twitter 官方/微博官方）→ 可靠
+- 主流新闻媒体（搜狐、网易、36Kr、InfoQ 等转载报道）→ 基本可靠（媒体报道，非 UGC）
+- Wikipedia/权威媒体 → 基本可靠
+- LinkedIn 团队负责人/官方人员发帖 → 高可信度（一手官方信息）
+- 企业招聘平台（Boss直聘、拉勾、maimai、mokahr、greenhouse 等）→ 基本可靠
+- 论坛/问答/反诈预警帖（知乎、Reddit、Quora、反诈博客）→ **本身不可靠，但作为「已有人反映此类诈骗」
+  的旁证是合理的**：在证伪/预警语境下引用它们佐证「存在同类诈骗模式」不应因此驳回整体裁定
+
+放行规则（满足任意一条则通过）:
+1. 核心裁定事实（公司是否存在、招聘/岗位是否真实、健康度）有 ≥2 个基本可靠以上的来源
+2. 有 ≥1 个官方一手来源支撑裁定
+3. 所有来源交叉一致且无矛盾，且核心来源可信度 Medium 及以上
+4. **证伪/负面裁定（"大概率有坑"/"谨慎"/Likely a Scam）的特殊规则**：对不存在或冒名的实体，
+   **不可能**找到官方来源证明它是假的——"多渠道检索查无官方存在"（无官网/无注册记录/
+   无招聘平台记录）**本身就是核心证据**。当裁定为负面且满足以下两点即通过：
+   a) 有工具一手数据支撑（如 domain_whois_lookup 返回的注册时间/注册商、多次 web_search
+      的"查无结果"）——工具直接返回的数据视为**可靠一手来源**；
+   b) 与已知诈骗模式匹配（加密货币付薪、预付费用、仅 Telegram 联系、无面试直录等）。
+
+驳回规则（以下情况才驳回）:
+- 全部核心事实的来源都是不可靠来源（UGC/AI聚合站）——注意：工具一手数据（whois/检索结果）
+  与"查无"类负面证据**不属于**不可靠来源，不要因此驳回
+- 发现来源与事实**矛盾**（如声称来自官网但实际是论坛帖子；数值/名称对不上）"""
+    return """来源可信度判断标准:
+- 官方网站/学术期刊/政府数据 → 可靠
+- Wikipedia/权威媒体 → 基本可靠
+- 论坛/问答网站/个人博客/AI聚合站 → 不可靠
+
+如果存在多个可靠来源交叉验证同一数据，即使其中有一个不可靠来源也应通过。"""
+
+
+def _norm_supported(v) -> Optional[str]:
+    """把 judge 的 supported 值归一到三态（评审 P0 D3）。
+
+    只有 `contradicted`（摘录与断言直接矛盾）才是真 misattribution、才硬毙；`no_evidence`
+    （摘录截断没提到）是常态噪声、不驳回。对旧格式布尔容错：True→yes、False→no_evidence
+    （**保守**，避免把「没提到」误当「造假」——这正是本次误杀的根因）。
+    """
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return "yes" if v else "no_evidence"
+    s = str(v).strip().lower()
+    if s.startswith("contradict"):
+        return "contradicted"
+    if s in ("yes", "true", "supported", "support"):
+        return "yes"
+    return "no_evidence"  # no_evidence / unknown / no / 其它一律作「未提及」
+
+
 def _parse_facts_from_output(answer: str) -> list[dict]:
     """从 Agent 输出中提取 [Fact]/[Source]/[Confidence] 三元组
 
@@ -286,49 +374,27 @@ class VerifierAgent:
                 excerpt = _match_evidence(_source_domain(f.get("source", "")), evidence or {})
                 if excerpt:
                     entailment_idxs.append(i)
-                    facts_text += f"    已检索到该来源的正文摘录（核对断言是否属实）: {excerpt[:_EXCERPT_CHARS]}\n"
+                    # D2：取与断言重叠度最高的窗口，而非机械取前 300 字（否则命中率极低）
+                    window = _relevant_window(excerpt, f["fact"], _EXCERPT_CHARS)
+                    facts_text += f"    已检索到该来源的正文摘录（核对断言是否属实）: {window}\n"
             facts_text += "\n"
 
-        if stage and ("stage4" in stage or "stage3" in stage):
-            source_criteria = """来源可信度判断标准（OfferCheck offer/沟通 证伪专用）:
-- 官方网站/官方社交媒体（LinkedIn 官方账号/Twitter 官方/微博官方）→ 可靠
-- 主流新闻媒体（搜狐、网易、36Kr、InfoQ 等转载报道）→ 基本可靠（媒体报道，非 UGC）
-- Wikipedia/权威媒体 → 基本可靠
-- LinkedIn 团队负责人/官方人员发帖 → 高可信度（一手官方信息）
-- 企业招聘平台（Boss直聘、拉勾、maimai、mokahr 等）→ 基本可靠
-- 论坛/问答网站（知乎、Reddit、Quora）/个人博客/AI聚合站 → 不可靠
-
-放行规则（满足任意一条则通过）:
-1. 核心裁定事实（公司是否存在、招聘是否真实）有 ≥2 个基本可靠以上的来源
-2. 有 ≥1 个官方一手来源支撑裁定
-3. 所有来源交叉一致且无矛盾，且核心来源可信度 Medium 及以上
-4. **证伪/负面裁定（"大概率有坑"/Likely a Scam）的特殊规则**：对不存在或冒名的实体，
-   **不可能**找到官方来源证明它是假的——"多渠道检索查无官方存在"（无官网/无注册记录/
-   无招聘平台记录）**本身就是核心证据**。当裁定为负面且满足以下两点即通过：
-   a) 有工具一手数据支撑（如 domain_whois_lookup 返回的注册时间/注册商、多次 web_search
-      的"查无结果"）——工具直接返回的数据视为**可靠一手来源**；
-   b) 与已知诈骗模式匹配（加密货币付薪、预付费用、仅 Telegram 联系、无面试直录等）。
-
-驳回规则（以下情况才驳回）:
-- 全部核心事实的来源都是不可靠来源（UGC/AI聚合站）——注意：工具一手数据（whois/检索结果）
-  与"查无"类负面证据**不属于**不可靠来源，不要因此驳回
-- 发现来源与事实矛盾（如声称来自官网但实际是论坛帖子）"""
-        else:
-            source_criteria = """来源可信度判断标准:
-- 官方网站/学术期刊/政府数据 → 可靠
-- Wikipedia/权威媒体 → 基本可靠
-- 论坛/问答网站/个人博客/AI聚合站 → 不可靠
-
-如果存在多个可靠来源交叉验证同一数据，即使其中有一个不可靠来源也应通过。"""
+        source_criteria = _source_criteria(stage)  # D4：stage1/3/4 走宽松、其余严格
 
         entailment_note = ""
         if entailment_idxs:
+            # D3：三态判定——只有「摘录直接矛盾」才是真 misattribution 硬毙；「300 字里没提到」
+            # （no_evidence）是摘录截断的常态噪声，不作驳回理由（至多降低置信）。
             entailment_note = (
-                "\n**内容核实（entailment，重点）**：部分事实附了『已检索到该来源的正文摘录』。"
-                "对这些事实，除判断来源可信度外，还要判断**摘录内容是否真的支持该事实断言**"
-                f"（`supported`）。若断言在摘录中查无实据、或与摘录矛盾（即来源真实但被张冠李戴/"
-                "曲解——misattribution），`supported=false`。未附摘录的事实 `supported=null`（不影响）。"
-                "**任何一条核心事实被判 `supported=false`，总体应 `failed`**，并在 feedback 指出哪条对不上。\n"
+                "\n**内容核实（entailment，三态判定，重点）**：部分事实附了『已检索到该来源的正文摘录』"
+                "（这只是原文的一小段截断窗口）。对这些事实判断 `supported`：\n"
+                '  - `"yes"`：摘录明确支持该断言；\n'
+                '  - `"contradicted"`：摘录**直接与断言矛盾**（如声称来自官网、摘录却是论坛帖；'
+                "数值/名称对不上）——这才是真 misattribution；\n"
+                '  - `"no_evidence"`：摘录里既不支持也不矛盾（只是这一小段没提到）——**这是常态**，'
+                "**不等于造假**；\n"
+                "  - 未附摘录的事实 `supported=null`。\n"
+                "**只有 `contradicted` 才判该事实不可信并影响总体**；`no_evidence` 绝不作为驳回理由。\n"
             )
 
         prompt = f"""你是严格的事实核查员。请对每条事实**独立**判断（CoVe factored 核查），然后给出总体结论。
@@ -345,7 +411,7 @@ class VerifierAgent:
 输出 JSON（严格遵守格式，不要输出其他内容）:
 {{
   "fact_verdicts": [
-    {{"index": 1, "reliable": true/false, "supported": true/false/null, "reason": "该条事实来源可信度 + 内容是否被摘录支持的评判理由"}},
+    {{"index": 1, "reliable": true/false, "supported": "yes"|"no_evidence"|"contradicted"|null, "reason": "该条事实来源可信度 + 内容与摘录的关系（支持/矛盾/未提及）"}},
     ...
   ],
   "overall": "verified|unverified|failed",
@@ -409,35 +475,36 @@ class VerifierAgent:
         feedback = data.get("feedback", "")
         entail_set = set(entailment_idxs or [])
 
-        # 收集被判为不可靠 / 内容不被支持（misattribution）的逐条事实
+        # 收集被判为不可靠 / 内容与来源矛盾（misattribution）的逐条事实
         fact_verdicts = data.get("fact_verdicts", [])
         unreliable_facts = []
-        misattributed = []  # supported=false 的 entailment 事实
+        misattributed = []  # supported=contradicted 的 entailment 事实（真 misattribution）
         for fv in fact_verdicts:
             idx = fv.get("index", 0)
             if not (1 <= idx <= len(facts)):
                 continue
             fact = facts[idx - 1]
             bad_source = not fv.get("reliable", True)
-            # 只对做过 entailment 的事实认定 misattribution（supported 显式为 False）
-            bad_content = idx in entail_set and fv.get("supported", None) is False
-            if bad_source or bad_content:
+            # D3 三态：只有 contradicted 才是真 misattribution；no_evidence（摘录截断没提到）
+            # 是常态噪声，绝不硬毙。只对做过 entailment 的事实认定。
+            contradicted = idx in entail_set and _norm_supported(fv.get("supported")) == "contradicted"
+            if bad_source or contradicted:
                 why = fv.get("reason", "来源不可靠")
-                if bad_content:
-                    why = f"[内容不符/misattribution] {why}"
+                if contradicted:
+                    why = f"[内容矛盾/misattribution] {why}"
                     misattributed.append(idx)
                 unreliable_facts.append({**fact, "reject_reason": why})
-                logger.debug("CoVe 逐条驳回 [%d] bad_source=%s bad_content=%s: %s",
-                             idx, bad_source, bad_content, fact.get("source", ""))
+                logger.debug("CoVe 逐条驳回 [%d] bad_source=%s contradicted=%s: %s",
+                             idx, bad_source, contradicted, fact.get("source", ""))
 
-        # entailment 硬规则（评审 2.2）：任何核心事实内容不被来源支持 → 强制 failed，
-        # 即使 LLM overall 放行（misattribution 是最危险的幻觉，不容放过）。
+        # entailment 硬规则（评审 2.2 + P0 D3 校准）：任何核心事实内容与来源**直接矛盾** →
+        # 强制 failed（misattribution 是最危险的幻觉，不容放过）；no_evidence 不触发。
         if misattributed and overall != "failed":
-            logger.warning("CoVe: %d 条事实内容与来源不符（misattribution），强制驳回", len(misattributed))
+            logger.warning("CoVe: %d 条事实内容与来源矛盾（misattribution），强制驳回", len(misattributed))
             overall = "failed"
             reason = (reason + " " if reason else "") + \
-                f"（检出 {len(misattributed)} 条断言与其检索来源正文不符）"
-            feedback = feedback or "有关键断言在其引用来源的正文中查无实据，请据实修正或补足来源。"
+                f"（检出 {len(misattributed)} 条断言与其检索来源正文矛盾）"
+            feedback = feedback or "有关键断言与其引用来源的正文相矛盾，请据实修正或更换来源。"
 
         if overall == "failed":
             logger.info("CoVe 总体驳回: %s（不可靠事实数=%d）", reason[:100], len(unreliable_facts))

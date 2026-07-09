@@ -333,6 +333,9 @@ _RETRIEVAL_TOOLS = frozenset({
     "read_pdf", "read_xlsx", "domain_whois_lookup",
 })
 
+# 内容抓取工具：observation 是「某个 URL 的真实正文」（区别于 web_search 的结果列表）
+_CONTENT_FETCH_TOOLS = frozenset({"web_fetch", "read_pdf", "read_xlsx", "tavily_extract"})
+
 # 显式终止工具：模型调用它提交结构化裁定并结束（见 get_openai_tool_definitions 特例）
 FINALIZE_TOOL = "submit_verdict"
 
@@ -353,6 +356,57 @@ def _url_domain(u: str) -> str:
         return urlparse(u).netloc.lower().removeprefix("www.")
     except Exception:  # noqa: BLE001
         return ""
+
+
+_EVIDENCE_EXCERPT_CHARS = 1500
+_EVIDENCE_MAX_DOMAINS = 20
+
+
+def register_evidence(
+    registry: dict, strength: dict, tool_name: str, tool_args: str, observation: str,
+    *, cap: int = _EVIDENCE_MAX_DOMAINS,
+) -> None:
+    """把一次成功检索的正文按域名归档进 evidence_registry（评审 2.2 + P0 D1 修）。
+
+    **分级**避免「搜索结果列表」污染「真实抓取正文」——这是线上 Trial 误杀的根因：
+    web_search 的 observation 是结果列表，此前把列表里出现的**每个域名**都映射到**同一段
+    列表文本**、且先到先得，把真正 web_fetch 抓到的官网正文永远挡在门外。
+
+    规则：
+      - 内容抓取工具（web_fetch/read_pdf/read_xlsx/tavily_extract）：摘录=真实抓取正文，
+        域名只取**被抓 URL（args 里的 URL）**的域名 → strong，可覆盖弱占位；
+        **不**登记正文里的出站链接域名（否则把 A 页正文错配给 B 域）。
+      - domain_whois_lookup：域名=被查裸域名（args），摘录=whois 数据 → strong。
+      - web_search/wikipedia_search：observation 是结果列表 → 各结果域名登记列表文本，
+        仅作 weak 占位，**绝不覆盖 strong**（真正的正文一旦抓到就顶替它）。
+    """
+    excerpt = observation[:_EVIDENCE_EXCERPT_CHARS]
+    if tool_name in _CONTENT_FETCH_TOOLS:
+        doms = {_url_domain(u) for u in _URL_RE.findall(tool_args)}
+        tier = "strong"
+    elif tool_name == "domain_whois_lookup":
+        doms = {d.lower().removeprefix("www.") for d in _BARE_DOMAIN_RE.findall(tool_args)}
+        tier = "strong"
+    else:  # web_search / wikipedia_search 等检索列表
+        doms = {_url_domain(u) for u in _URL_RE.findall(observation)}
+        tier = "weak"
+
+    for d in doms:
+        if not d or "." not in d:  # 过滤伪域名（markdown 加粗残留 "**" 等）
+            continue
+        cur = strength.get(d)
+        if tier == "strong":
+            if cur == "strong":
+                continue  # 已有真实正文，先到优先，不覆盖
+            if d not in registry and len(registry) >= cap:
+                continue
+            registry[d] = excerpt
+            strength[d] = "strong"
+        else:  # weak：仅在该域名尚无任何摘录时占位
+            if cur is not None or len(registry) >= cap:
+                continue
+            registry[d] = excerpt
+            strength[d] = "weak"
 
 
 def attribute_sources(
@@ -856,7 +910,9 @@ def react_loop(
     seen_urls: set[str] = set()
     # entailment 证据 registry（评审 2.2）：域名 → 该来源检索到的正文摘录，供 Verifier
     # 核对「来源真实但内容不支持断言」（misattribution）。截断前采集，域名数上限 20。
+    # evidence_strength：域名 → "strong"|"weak"，让真实抓取正文顶替搜索列表占位（P0 D1）。
     evidence_registry: dict[str, str] = {}
+    evidence_strength: dict[str, str] = {}
     # 步数预警：OfferCheck stage 下在步数耗尽前注入一次 submit_verdict 提示
     _near_limit_warned = False
     # 跨步硬缓存：tool_name + normalized_args → observation（去重，防冗余调用）
@@ -1142,18 +1198,11 @@ def react_loop(
                     seen_urls.update(_URL_RE.findall(observation))
                 seen_urls.update(_URL_RE.findall(tool_args))
 
-                # entailment 证据 registry（评审 2.2）：把本次检索正文按域名归档（截断前、
-                # 取前 1500 字）。域名来源：观察/参数里的 URL + 参数本身若是裸域名（whois）。
+                # entailment 证据 registry（评审 2.2 + P0 D1）：分级归档，避免搜索结果列表
+                # 污染真实抓取正文（内容工具登记被抓 URL 域名=strong、可覆盖搜索 weak 占位）。
                 if last_tool_success and tool_name in _RETRIEVAL_TOOLS:
-                    _doms = {_url_domain(u) for u in _URL_RE.findall(observation)}
-                    _doms |= {_url_domain(u) for u in _URL_RE.findall(tool_args)}
-                    _doms |= {d.lower().removeprefix("www.")
-                              for d in _BARE_DOMAIN_RE.findall(tool_args)}
-                    _excerpt = observation[:1500]
-                    for _d in _doms:
-                        # 需含点（过滤 markdown 加粗残留 "**" 之类的伪域名）
-                        if _d and "." in _d and _d not in evidence_registry and len(evidence_registry) < 20:
-                            evidence_registry[_d] = _excerpt
+                    register_evidence(evidence_registry, evidence_strength,
+                                      tool_name, tool_args, observation)
 
                 # 信用分配
                 step_utility = _compute_step_utility(

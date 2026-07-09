@@ -372,6 +372,7 @@ class ReflexionReActAgent:
                 "eval_reason": eval_result.reason,
                 "elapsed_seconds": round(trial_elapsed, 1),
                 "reflection": None,
+                "verdict": react_verdict,  # 结构化裁定（评审 3.2）；D5 全败回传最佳答案时一并取
             }
             trial_details.append(trial_info)
             _emit("trial_evaluated", trial=trial, success=eval_result.success,
@@ -492,24 +493,25 @@ class ReflexionReActAgent:
                     print(f"📋 Scratchpad 更新: +{len(new_facts)} 条事实 (共 {len(scratchpad_facts)} 条)")
                 logger.info("Scratchpad 更新: +%d facts, total=%d", len(new_facts), len(scratchpad_facts))
 
-        # 所有 Trial 用尽
-        last_answer = trial_details[-1]["answer"] if trial_details else ""
-        logger.warning("Reflexion 所有 %d 轮 Trial 均失败", self.max_trials)
+        # 所有 Trial 用尽：回传**最佳**答案而非最后一轮（评审 P0 D5）——最后一轮可能是
+        # llm_error 的错误串（线上就是 Trial 1 好答案被 Trial 2 的 400 覆盖）。
+        best_answer, best_verdict = self._pick_best_final(trial_details)
+        logger.warning("Reflexion 所有 %d 轮 Trial 均失败（回传最佳答案）", self.max_trials)
 
         if verbose:
             print(f"\n{'='*60}")
             print(f"❌ 所有 {self.max_trials} 轮 Trial 均失败")
-            print(f"   最后答案: {last_answer[:200]}")
+            print(f"   最佳答案: {best_answer[:200]}")
             print(f"{'='*60}")
 
         stop_run_log()
         return ReflexionResult(
             success=False,
-            answer=last_answer,
+            answer=best_answer,
             trials_used=self.max_trials,
             trial_details=trial_details,
             reflections=self.memory.get_memories_for_prompt(),
-            verdict=react_verdict,  # 评审 3.2：最后一轮的结构化裁定（若有）
+            verdict=best_verdict,  # 评审 3.2 + D5：最佳答案那轮的结构化裁定
             total_prompt_tokens=agg_prompt_tokens,
             total_completion_tokens=agg_completion_tokens,
         )
@@ -759,6 +761,32 @@ Agent 最终答案: {answer_snippet}
         except Exception as exc:
             logger.error("Scratchpad 事实提取失败: %s", exc)
             return []
+
+    @staticmethod
+    def _pick_best_final(trial_details: list[dict]) -> tuple[str, Optional[dict]]:
+        """全败时挑最有价值的一轮答案回传（评审 P0 D5）。
+
+        优先「有实质答案、非 llm_error/api_error」的轮——尤其 **Evaluator 已通过、仅被
+        Verifier caveat（unreliable_source）** 的轮：那是完整裁定，比 llm_error 的错误串
+        有用得多。都没有才回退最后一轮。返回 (answer, verdict)。
+        """
+        if not trial_details:
+            return "", None
+
+        def _substantive(d: dict) -> bool:
+            a = (d.get("answer") or "").strip()
+            return bool(a) and not a.startswith("[错误]") \
+                and d.get("terminated_reason") != "llm_error" \
+                and d.get("failure_mode") != "api_error"
+
+        cands = [d for d in trial_details if _substantive(d)]
+        if not cands:
+            last = trial_details[-1]
+            return last.get("answer", ""), last.get("verdict")
+        # Verifier caveat 轮（有答案、Evaluator 认可、只是核查存疑）最值得展示
+        caveat = [d for d in cands if d.get("failure_mode") == "unreliable_source"]
+        pick = (caveat or cands)[-1]
+        return pick.get("answer", ""), pick.get("verdict")
 
     @staticmethod
     def _extract_visited_urls(trajectory: str, visited_urls: set) -> None:
