@@ -127,3 +127,44 @@ def test_d5_falls_back_to_last_when_all_errors():
 
 def test_d5_empty():
     assert ReflexionReActAgent._pick_best_final([]) == ("", None)
+
+
+# ── A′-2: 混合标签分类不再取决于破折号变体 ─────────────────────────────────
+# 事故 20260709：模型输出 "Suspicious – Likely a Scam"（en dash 不在旧分隔符表），
+# label 切不开 → 回退全文有序匹配被 scam 词升档成 likely_scam；换 em dash 却判
+# suspicious。补齐分隔符后一律 label-first 取首段（模型领句的那档）。
+
+def test_hedged_label_consistent_across_dashes():
+    from nexa_agent.verifier import _classify_verdict_level
+    for label in ("Suspicious — Likely a Scam",   # em dash
+                  "Suspicious – Likely a Scam",   # en dash（旧版漏判成 likely_scam）
+                  "Suspicious ― Likely a Scam",   # horizontal bar
+                  "Suspicious - Likely a Scam",   # 空格连字符
+                  "存疑–大概率有坑"):
+        assert _classify_verdict_level(label) == "suspicious", label
+
+
+def test_clean_labels_unaffected():
+    from nexa_agent.verifier import _classify_verdict_level
+    assert _classify_verdict_level("Likely a Scam") == "likely_scam"
+    assert _classify_verdict_level("大概率有坑 – 仿冒域名实锤") == "likely_scam"  # 领句是 scam 档
+    assert _classify_verdict_level("靠谱 —— 多方核实") == "reliable"
+
+
+def test_eval_scorer_same_separator_semantics():
+    from nexa_agent.eval_harness import classify_prediction_verdict
+    # 评分器与引擎分类器同源分隔符：混合标签两侧判定一致
+    assert classify_prediction_verdict("[Verdict] Suspicious – Likely a Scam\n[Fact] x") == "suspicious"
+    assert classify_prediction_verdict("[Verdict] 大概率有坑 – 域名仿冒\n") == "likely_scam"
+
+
+def test_ais_downgrade_rebuild_with_en_dash():
+    from nexa_agent.react_agent import apply_ais_confidence_downgrade
+    answer = ("[Verdict] 靠谱 – 多方核实无异常\n"
+              "[Fact] a\n[Source] https://fake1.example/x\n"
+              "[Fact] b\n[Source] https://fake2.example/y\n")
+    attribution = {"total_sources": 2, "unverified": 2}   # >1/3 未验证 → 触发降级
+    out, hit = apply_ais_confidence_downgrade(answer, attribution, "zh")
+    assert hit is True
+    assert "[Verdict] 存疑" in out          # en dash 也能正确切开 label 段并重写
+    assert "多方核实无异常" in out           # 原理由保留

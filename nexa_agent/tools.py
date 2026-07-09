@@ -118,13 +118,22 @@ def _submit_verdict_tool_def() -> Dict[str, Any]:
                 "properties": {
                     "verdict": {
                         "type": "string",
-                        "description": "总体裁定：靠谱 / 存疑 / 大概率有坑（或任务要求的结论标签）",
+                        "description": (
+                            "总体裁定，**只能取恰好一档**：靠谱 / 存疑 / 大概率有坑"
+                            "（选岗调研用 推荐/谨慎/不推荐；英文 Looks Legit / Suspicious / "
+                            "Likely a Scam）。**禁止混合两档**（如「存疑—大概率有坑」"
+                            "'Suspicious – Likely a Scam'）——拿不准时取更谨慎的中间档「存疑」。"
+                        ),
                     },
                     "summary": {"type": "string", "description": "一句话结论与核心理由"},
                     "evidence": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "证据条目，每条含：事实 + 真实来源（调用过的工具/URL）+ 置信度",
+                        "description": (
+                            "证据条目，每条**必须含 [Source] 标注真实调用过的 URL/工具**，"
+                            "格式：事实 [Source] <URL 或 工具名(参数)>。无来源支撑的条目"
+                            "不要放这里（移入 need_user_confirm）。系统会与真实调用记录逐条对账。"
+                        ),
                     },
                     "red_flags": {
                         "type": "array",

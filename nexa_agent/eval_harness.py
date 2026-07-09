@@ -190,7 +190,10 @@ def classify_prediction_verdict(prediction: str) -> str:
 
     verdict_match = re.search(r"\[Verdict\]\s*(.*?)(?:\n|$)", prediction, re.IGNORECASE)
     if verdict_match:
-        label = re.split(r"——|—|:|：|\s-\s", verdict_match.group(1).strip(), maxsplit=1)[0]
+        # 分隔符与引擎分类器同源（VERDICT_SEP_PATTERN，含 en dash 等变体），
+        # 否则混合标签在评分器与产品侧会判出不同等级
+        from nexa_agent.verifier import VERDICT_SEP_PATTERN
+        label = re.split(VERDICT_SEP_PATTERN, verdict_match.group(1).strip(), maxsplit=1)[0]
         level = _classify_verdict_label(label)
         if level != "unknown":
             return level

@@ -72,6 +72,14 @@ class VerdictResult:
 # ==========================================================================
 
 
+# 裁定 label 与理由之间的分隔符（label-first 分类的唯一真源，eval 评分器/AIS 降级共用）。
+# 必须覆盖各种破折号变体：此前漏了 en dash（–）——模型输出混合标签
+# "Suspicious – Likely a Scam" 时切不开 label，回退全文有序匹配被 scam 词升档成
+# likely_scam；同一标签换 em dash 却判 suspicious（分类结果取决于模型碰巧用哪种
+# 破折号）。补齐 – / ―，混合标签一律按 label-first 取首段（模型领句的那档）。
+VERDICT_SEP_PATTERN = r"——|—|–|―|：|:|\s-\s"
+
+
 def _classify_verdict_level(verdict_text: str) -> str:
     """把裁定原文归一化为可枚举的等级，供前端着色/图标
 
@@ -79,7 +87,7 @@ def _classify_verdict_level(verdict_text: str) -> str:
     （如「未发现…诈骗案例」），整行子串匹配会把「靠谱」误判成 likely_scam。
     label 判不出等级时才回退整行匹配兜底。
     """
-    label = re.split(r"——|—|：|:|\s-\s", verdict_text.strip(), maxsplit=1)[0]
+    label = re.split(VERDICT_SEP_PATTERN, verdict_text.strip(), maxsplit=1)[0]
     level = _match_verdict_keywords(label)
     return level if level != "unknown" else _match_verdict_keywords(verdict_text)
 
@@ -240,9 +248,15 @@ def _parse_facts_from_output(answer: str) -> list[dict]:
         conf_match = re.search(r"\[Confidence\]\s*(.*?)(?:\n|$)", block, re.IGNORECASE)
 
         if fact_match:
+            source = source_match.group(1).strip() if source_match else ""
+            if not source:
+                # 无 [Source] 标签但事实文本里内嵌了 URL → 取该 URL 作来源（B′ 配套：
+                # 别把「来源写在句子里」的事实误判成「未标注」，后续 AIS/entailment 照常核验）
+                m_url = _URL_IN_TEXT.search(fact_match.group(1))
+                source = m_url.group(0) if m_url else "未标注"
             facts.append({
                 "fact": fact_match.group(1).strip(),
-                "source": source_match.group(1).strip() if source_match else "未标注",
+                "source": source,
                 "confidence": conf_match.group(1).strip() if conf_match else "Unstated",
             })
 

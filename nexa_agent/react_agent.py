@@ -505,11 +505,12 @@ def apply_ais_confidence_downgrade(
     vidx = next((i for i, ln in enumerate(lines) if "[Verdict]" in ln), None)
 
     if vidx is not None:
-        from nexa_agent.verifier import _classify_verdict_level  # 复用 label-first 分类
+        # 复用 label-first 分类与同源分隔符（含 en dash 等变体，评审 A′-2）
+        from nexa_agent.verifier import _classify_verdict_level, VERDICT_SEP_PATTERN
         vtext = lines[vidx].split("[Verdict]", 1)[1].strip()
         if _classify_verdict_level(vtext) == "reliable":
             # 只重写 label 段（分隔符前那截），保留原理由
-            parts = re.split(r"(——|—|：|:|\s-\s)", vtext, maxsplit=1)
+            parts = re.split(f"({VERDICT_SEP_PATTERN})", vtext, maxsplit=1)
             rest = parts[2].strip() if len(parts) >= 3 else ""
             new_label = "存疑" if is_zh else "Suspicious"
             note = (f"（原裁定因 {unver}/{total} 条来源未验证已自动降级）"
@@ -535,6 +536,25 @@ def _as_str_list(v) -> list:
     if isinstance(v, str) or not isinstance(v, (list, tuple)):
         v = [v]
     return [s for s in (str(x).strip() for x in v) if s]
+
+
+def _evidence_all_unsourced(items: list) -> bool:
+    """evidence 条目是否**全部**未绑定来源（B′ 无来源硬门的判定）。
+
+    「有来源」= 条目里含 [Source] 标签、URL、或引用了某个真实工具名（如
+    domain_whois_lookup 的一手数据）。判定保守（全部缺失才拦），部分有来源的
+    提交放行——由 Verifier 权衡，避免硬门变成新的误杀源。
+    """
+    if not items:
+        return False
+    tool_names = tuple(TOOLS.keys())
+    for it in items:
+        low = it.lower()
+        if "[source]" in low or _URL_RE.search(it) or _BARE_DOMAIN_RE.search(it):
+            return False
+        if any(t in low for t in tool_names):
+            return False
+    return True
 
 
 def _render_verdict(fields: dict) -> str:
@@ -906,6 +926,9 @@ def react_loop(
     successful_retrievals = 0
     evidence_gate_nags = 0
     submit_retry_nags = 0
+    # B′ 无来源硬门：evidence 全部未挂来源时拒绝一次（只提醒 1 次防死锁；线上实测
+    # 该失败模式此前要靠 Verifier 驳回整轮 Trial 才纠正，~87K tokens → 现压到 1 步）
+    source_nag_used = 0
     # 来源对账 registry：本次调查真实见过的 URL（观察全文，截断前收集）
     seen_urls: set[str] = set()
     # entailment 证据 registry（评审 2.2）：域名 → 该来源检索到的正文摘录，供 Verifier
@@ -1124,6 +1147,32 @@ def react_loop(
                                  step_count, len(fallback_text))
                     return _finalize(fallback_text or "调查完成，但最终裁定提交失败——请重试或查看调查轨迹。",
                                      reason="submit_verdict_fallback")
+
+                # ── B′ 无来源硬门：evidence 全部未绑定来源 → 拒绝一次要求补 [Source] ──
+                # 线上实测：prompt/schema 已写三遍「必须绑定来源」仍被无视，Trial 1 交出
+                # 8 条无来源事实 → Verifier 全判不可靠驳回整轮（白烧 ~87K tokens）。硬门把
+                # 纠正压到 step 级。只在「有真实检索可引用」且「全部条目缺来源」时拦（保守，
+                # 部分有来源交 Verifier 权衡）；只拦 1 次防死锁。
+                _ev_items = _as_str_list(fields.get("evidence"))
+                if (source_nag_used < 1 and successful_retrievals > 0
+                        and _evidence_all_unsourced(_ev_items)):
+                    source_nag_used += 1
+                    logger.warning("Step %d: submit_verdict evidence 全部未挂来源，拒绝并要求补 [Source]",
+                                   step_count)
+                    _emit("correction", step=step_count,
+                          message="submit_verdict 证据未绑定来源，已要求逐条补 [Source]")
+                    messages.append({
+                        "role": "tool", "tool_call_id": verdict_tc.id,
+                        "content": "[系统拒绝] 你的 evidence 条目没有一条绑定来源。每条证据必须"
+                                   "以 [Source] 标注你**本轮真实调用过**的 URL 或工具，例如：\n"
+                                   "  官网 careers 页要求至少 25% 到岗 [Source] https://www.anthropic.com/careers\n"
+                                   "  域名注册于 2001 年 [Source] domain_whois_lookup(anthropic.com)\n"
+                                   "没有来源支撑的条目：要么删除，要么移入 need_user_confirm 如实标注"
+                                   "「待确认」。**严禁**为凑数虚构来源——系统会与真实调用记录逐条对账。"
+                                   "请补全后重新调用 submit_verdict。",
+                    })
+                    last_tool_success = False
+                    continue
 
                 final_answer = _render_verdict(fields)
                 trajectory_parts.append(f"### Step {step_count}\nAction: {FINALIZE_TOOL}(...)")
