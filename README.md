@@ -10,7 +10,7 @@
 - **Powered by GMI Cloud** — DeepSeek-V4 Pro/Flash with layered thinking control, Kimi-K2 tool-call fallback, Gemini 3.1 vision OCR — routed per role by a model router.
 
 <p align="center">
-  <img src="assets/architecture.svg" alt="OfferCheck architecture: multimodal input → four stages (one engine, different stage prompts) → grounded ReAct + Reflexion investigation loop → three-state verdict with evidence" width="760">
+  <img src="assets/architecture.png" alt="OfferCheck architecture: multimodal input → four stages (one engine, different stage prompts) → grounded ReAct + Reflexion investigation loop → three-state verdict with evidence" width="760">
 </p>
 
 ---
