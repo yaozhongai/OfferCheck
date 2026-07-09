@@ -250,15 +250,12 @@ class ReflexionReActAgent:
             # 阶段 1: 检索长期记忆 + Scratchpad 事实 + 已访问 URL 约束
             memories = self.memory.get_memories_for_prompt()
 
-            # 注入 scratchpad 事实（最高优先级，放在最前面）
+            # 注入 scratchpad 事实（作为线索复用，但保留可反驳性——见 _build_scratchpad_block）
             if scratchpad_facts:
-                facts_block = (
-                    "以下是之前 Trial 已确认的事实数据，无需重新搜索，直接使用：\n"
-                    + "\n".join(f"- {f}" for f in scratchpad_facts)
-                )
+                facts_block = self._build_scratchpad_block(scratchpad_facts)
                 memories = [facts_block] + (memories or [])
                 if verbose:
-                    print(f"📋 Scratchpad: 注入 {len(scratchpad_facts)} 条已确认事实")
+                    print(f"📋 Scratchpad: 注入 {len(scratchpad_facts)} 条上一轮发现（供参考，非免检）")
 
             if visited_urls:
                 url_constraint = (
@@ -686,13 +683,32 @@ class ReflexionReActAgent:
         key = re.sub(r"[^\w一-鿿]", "", lesson.lower())
         return key[:30]
 
+    @staticmethod
+    def _build_scratchpad_block(facts: list[str]) -> str:
+        """把跨 Trial 的 Scratchpad 事实拼成注入块（评审 2.5：抗污染框定）。
+
+        **关键**：不再宣称「已确认 / 无需重新搜索 / 直接使用」。上一轮记录的"事实"
+        可能源自被 prompt-injection 或幻觉污染的观察，若当作**免检前提**注入，会让
+        错误跨 Trial 传播且不再被复核（对反诈产品尤其危险）。改为「上一轮的初步发现，
+        供参考、非本轮独立核实」，保留**可反驳性**：影响裁定的关键结论仍须本轮重新取证，
+        与新证据冲突时以新证据为准。
+        """
+        lines = "\n".join(f"- {f}" for f in facts)
+        return (
+            "【上一轮调查的初步发现（供参考，非本轮独立核实）】\n"
+            "下列条目可作为**线索**复用以避免重复劳动；但它们未在本轮重新核实，"
+            "**不得作为 [Verdict] 的免检前提**。任何影响裁定的关键结论仍须本轮用工具"
+            "重新取证；若新证据与下列条目冲突，一律以新证据为准。\n"
+            + lines
+        )
+
     def _extract_scratchpad_facts(
         self, task: str, answer: str, trajectory: str,
     ) -> list[str]:
-        """从本轮 Trial 轨迹中提取已确认的关键事实数据
+        """从本轮 Trial 轨迹中提取关键事实数据（数值/名称/日期等具体数据点）。
 
-        不是教训/策略，是具体的数据点（数值、名称、日期等），
-        下一轮 Trial 可以直接使用而无需重新搜索。
+        这些数据点会作为**线索**在下一轮 Trial 复用，避免重复劳动；但注入时保留
+        可反驳性（见 _build_scratchpad_block），不作为裁定的免检前提。
         """
         from openai import OpenAI
 
