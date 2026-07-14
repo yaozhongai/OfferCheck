@@ -1,5 +1,18 @@
 # OfferCheck — Job Offer Due-Diligence Agent
 
+<p align="center">
+  <a href="https://offercheck.up.railway.app/">
+    <img src="assets/offercheck_promo_en.png" alt="OfferCheck — paste an offer, JD, or recruiter message and a skeptical agent investigates it live, returning Looks Legit / Suspicious / Likely a Scam with a source-verified evidence chain" width="880">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://offercheck.up.railway.app/"><img src="https://img.shields.io/badge/demo-live-CF6A44?style=flat-square" alt="Live demo"></a>
+  &nbsp;<img src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+  &nbsp;<img src="https://img.shields.io/badge/Next.js-15-000000?style=flat-square&logo=next.js&logoColor=white" alt="Next.js 15">
+  &nbsp;<img src="https://img.shields.io/badge/powered%20by-GMI%20Cloud-6E56CF?style=flat-square" alt="Powered by GMI Cloud">
+</p>
+
 > A skeptical research copilot for job seekers. Paste an offer, JD, company name, recruiter message, or screenshot — it independently investigates that **specific opportunity** on the live web and returns a verdict of **Looks Legit / Suspicious / Likely a Scam**, with a source-verified evidence chain and items for you to confirm yourself.
 
 **Live demo**: https://offercheck.up.railway.app/ — try: *“I received an offer from apple-hiring-team.com asking for a $200 gift-card background-check fee — is this legit?”*

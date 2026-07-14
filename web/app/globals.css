@@ -81,6 +81,14 @@ body {
 @media (max-width: 720px) {
   .oc-header-tag { display: none !important; }
 }
+/* Phone: the header can't hold the wordmark + both actions in ~375px, so the
+   "Start a check" button overflows. Drop the redundant "How it works" link
+   (the hero already has a "See all 4 stages" scroll cue) and tighten the
+   desktop-sized 40px side padding, leaving the primary CTA room to breathe. */
+@media (max-width: 560px) {
+  .oc-header { padding-left: 18px !important; padding-right: 18px !important; }
+  .oc-header .oc-cue { display: none !important; }
+}
 /* Stage cards on the landing's second screen */
 .oc-card {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;

@@ -110,9 +110,11 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
   const [typedN, setTypedN] = useState(0);
   const [phase, setPhase] = useState(0);   // how many TRACE rows are visible
   const [fading, setFading] = useState(false);
-  // ?promo=1 — promo-poster variant: adds the Chinese slogan line and hides
-  // dev chrome. The regular entry screen stays English-only.
+  // ?promo — promo-poster variant: bigger type, hides dev chrome. Chinese by
+  // default (?promo / ?promo=1); ?promo=en renders the same poster in English.
+  // The regular entry screen stays English-only.
   const [promo, setPromo] = useState(false);
+  const [promoZh, setPromoZh] = useState(false);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -123,8 +125,10 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
   }, []);
 
   useEffect(() => {
-    if (!new URLSearchParams(window.location.search).has("promo")) return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("promo")) return;
     setPromo(true);
+    setPromoZh(params.get("promo") !== "en");   // ?promo=en → English poster
     const s = document.createElement("style");
     s.textContent = "nextjs-portal, #devtools-indicator { display: none !important; }";
     document.head.appendChild(s);
@@ -190,7 +194,7 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
       <section id="oc-top" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
 
       {/* ═══ Header ═══════════════════════════════════════════════ */}
-      <header style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between",
+      <header className="oc-header" style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "11px 40px", borderBottom: `1px solid ${LINE}` }}>
         <div style={{ display: "flex", alignItems: "center", gap: promo ? 13 : 10 }}>
           {/* Promo poster is consumed at ~0.42× scale inside WeChat articles —
@@ -254,7 +258,7 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
               </span>
             </h1>
 
-            {promo && (
+            {promoZh && (
               <div className="oc-anim" style={{ fontFamily: CJK,
                 fontSize: 36, fontWeight: 700, letterSpacing: "0.2em", color: ACCENT, marginTop: 18,
                 animation: "ocFadeUp 0.55s ease 0.1s both" }}>
@@ -262,7 +266,7 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
               </div>
             )}
 
-            {promo ? (
+            {promoZh ? (
               <p className="oc-anim" style={{ fontFamily: CJK, fontSize: 16.5, lineHeight: 1.8, color: FOG,
                 maxWidth: 470, marginTop: 16, animation: "ocFadeUp 0.55s ease 0.15s both" }}>
                 粘贴 Offer、JD、招聘沟通或公司名称。OfferCheck 围绕这个具体机会独立调查，
@@ -285,7 +289,7 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
                 cursor: "pointer", boxShadow: "0 6px 22px -6px oklch(58% 0.13 40 / 0.55)" }}>
                 Start a check →
               </button>
-              {promo
+              {promoZh
                 ? <span style={{ fontFamily: CJK, fontSize: 13, color: FAINT }}>免费使用 · 无需注册 · 每个结论都有出处</span>
                 : <span style={monoTag}>free · no sign-up · every claim sourced</span>}
             </div>
@@ -296,13 +300,13 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
             <div className="oc-anim" style={{ background: "white", border: `1px solid ${LINE}`,
               borderRadius: 14, padding: "14px 18px 16px", marginTop: 28, maxWidth: 560,
               animation: "ocFadeUp 0.55s ease 0.45s both" }}>
-              <div style={{ fontFamily: promo ? CJK : MONO, fontSize: promo ? 12 : 10, fontWeight: 700,
+              <div style={{ fontFamily: promoZh ? CJK : MONO, fontSize: promo ? 12 : 10, fontWeight: 700,
                 letterSpacing: promo ? "0.2em" : "0.16em", textTransform: "uppercase", color: FAINT }}>
-                {promo ? "工作流程" : "How a check runs"}
+                {promoZh ? "工作流程" : "How a check runs"}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))",
                 gap: 12, marginTop: 11 }}>
-                {(promo ? FLOW_CN : FLOW_EN).map((st, i, arr) => (
+                {(promoZh ? FLOW_CN : FLOW_EN).map((st, i, arr) => (
                   <div key={st.t}>
                     {/* number + connector — the stepper reads as flow without arrow glyphs */}
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -311,9 +315,9 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
                       </span>
                       {i < arr.length - 1 && <span style={{ flex: 1, height: 1, background: LINE }} />}
                     </div>
-                    <div style={{ fontFamily: promo ? CJK : SANS, fontSize: promo ? 15.5 : 14.5, fontWeight: 800,
+                    <div style={{ fontFamily: promoZh ? CJK : SANS, fontSize: promo ? 15.5 : 14.5, fontWeight: 800,
                       color: INK, marginTop: 6, letterSpacing: "-0.01em", whiteSpace: "nowrap" }}>{st.t}</div>
-                    <div style={{ fontFamily: promo ? CJK : SANS, fontSize: promo ? 11.5 : 11, color: FAINT,
+                    <div style={{ fontFamily: promoZh ? CJK : SANS, fontSize: promo ? 11.5 : 11, color: FAINT,
                       marginTop: 3, lineHeight: 1.45 }}>{st.d}</div>
                   </div>
                 ))}
@@ -409,30 +413,30 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
                       marginTop: 2, animation: "ocStepIn 0.3s ease-out both" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                         <span className="oc-anim" style={{ display: "inline-block", border: `3px solid ${ALARM}`,
-                          color: ALARM, fontFamily: promo ? CJK : MONO, fontSize: promo ? 21 : 14.5, fontWeight: 800,
+                          color: ALARM, fontFamily: promoZh ? CJK : MONO, fontSize: promo ? 21 : 14.5, fontWeight: 800,
                           letterSpacing: promo ? "0.12em" : "0.07em", textTransform: "uppercase",
                           padding: promo ? "5px 14px" : "4px 12px",
                           borderRadius: 6, transform: "rotate(-3deg)",
                           animation: "ocStampIn 0.42s cubic-bezier(0.2, 1.4, 0.4, 1) both" }}>
-                          {promo ? "大概率有坑" : "Likely a Scam"}
+                          {promoZh ? "大概率有坑" : "Likely a Scam"}
                         </span>
                         <span style={{ fontFamily: MONO, fontSize: promo ? 11.5 : 10.5, color: "oklch(45% 0.08 25)" }}>
-                          {promo ? "Likely a Scam · high confidence" : "high confidence · re-verified"}
+                          {promoZh ? "Likely a Scam · high confidence" : "high confidence · re-verified"}
                         </span>
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: promo ? 6 : 4, marginTop: promo ? 11 : 9 }}>
-                        {(promo ? RED_FLAGS_CN : RED_FLAGS).map(f => (
+                        {(promoZh ? RED_FLAGS_CN : RED_FLAGS).map(f => (
                           <div key={f} style={{ display: "flex", gap: 8, fontSize: promo ? 13.5 : 11.5,
                             lineHeight: 1.5, color: ALARM_INK,
-                            fontFamily: promo ? CJK : SANS }}>
+                            fontFamily: promoZh ? CJK : SANS }}>
                             <span style={{ color: ALARM, flexShrink: 0 }}>⚑</span>
                             <span>{f}</span>
                           </div>
                         ))}
                       </div>
-                      <div style={{ fontFamily: promo ? CJK : MONO, fontSize: promo ? 11.5 : 10.5, color: "oklch(45% 0.08 25)",
+                      <div style={{ fontFamily: promoZh ? CJK : MONO, fontSize: promo ? 11.5 : 10.5, color: "oklch(45% 0.08 25)",
                         marginTop: promo ? 10 : 8, paddingTop: promo ? 9 : 7, borderTop: "1px dashed oklch(82% 0.06 25)" }}>
-                        {promo ? "6 步调查 · 引用 4 个来源 · 已独立复核" : "6 steps · 4 sources cited · re-verified independently"}
+                        {promoZh ? "6 步调查 · 引用 4 个来源 · 已独立复核" : "6 steps · 4 sources cited · re-verified independently"}
                       </div>
                     </div>
                   );
@@ -476,14 +480,15 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
       {promo && (
         <footer style={{ flexShrink: 0, borderTop: `1px solid ${LINE}` }}>
           <div style={{ maxWidth: 1280, margin: "0 auto", padding: "18px 56px 24px" }}>
-            <div style={{ fontFamily: CJK, fontSize: 13, fontWeight: 600, letterSpacing: "0.18em", color: FAINT }}>
-              覆盖求职全流程
+            <div style={{ fontFamily: promoZh ? CJK : MONO, fontSize: 13, fontWeight: 600,
+              letterSpacing: "0.18em", color: FAINT, textTransform: promoZh ? "none" : "uppercase" }}>
+              {promoZh ? "覆盖求职全流程" : "Covers the whole job search"}
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "12px 44px", marginTop: 12 }}>
-              {STAGES_CN.map((n, i) => (
+              {(promoZh ? STAGES_CN : STAGES.map(s => s.name)).map((n, i) => (
                 <div key={n} style={{ display: "flex", alignItems: "baseline", gap: 9 }}>
                   <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 800, color: ACCENT }}>0{i + 1}</span>
-                  <span style={{ fontFamily: CJK, fontSize: 18, fontWeight: 700, color: INK }}>{n}</span>
+                  <span style={{ fontFamily: promoZh ? CJK : SANS, fontSize: 18, fontWeight: 700, color: INK }}>{n}</span>
                 </div>
               ))}
             </div>
