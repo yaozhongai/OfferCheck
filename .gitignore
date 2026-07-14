@@ -104,3 +104,8 @@ CLAUDE.md
 skills/
 tests/
 pytest.ini
+
+# ── 本地运行产物：eval 输出 / 报告 / 路演稿（本地保留，不入公开仓库）──
+nexa_agent/results/
+/report_*.json
+waic_roadshow.xml

@@ -2,6 +2,7 @@
 
 import { useRef, useState, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
+import Landing from "./landing";
 import type { FormData } from "./ui";
 import {
   Stage, EngineEvent, StepStatus, TraceItem, RunState, StageState,
@@ -81,6 +82,18 @@ let _idSeq = 0;
 function nextId() { return ++_idSeq; }
 
 export default function Home() {
+  // Landing gate — a fresh visit starts on the entry screen. Entering pushes a
+  // history entry so the browser Back button returns to the landing instead of
+  // leaving the site (and Forward re-enters). history.state survives reloads,
+  // so refreshing while in the app stays in the app.
+  const [entered, setEntered] = useState(false);
+
+  useEffect(() => {
+    if (window.history.state?.oc === "app") setEntered(true);
+    const onPop = (e: PopStateEvent) => setEntered(e.state?.oc === "app");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const [cases, setCases] = useState<Case[]>(() => [DEFAULT_CASE()]);
   const [activeCaseId, setActiveCaseId] = useState<string>("case-1");
   const [hydrated, setHydrated] = useState(false);
@@ -204,6 +217,37 @@ export default function Home() {
       return { ...prev, [s]: { ...cur, followups } };
     });
   }, [patchStageStates]);
+
+  // ─── Landing → app entry ─────────────────────────────────────────
+  // demo: land on Offer Verification with the stage-4 demo case pre-filled
+  // (the same case the landing's replay panel shows). Never clobber an
+  // in-progress case — spin up a fresh one instead.
+  function enterApp(opts?: { demo?: boolean }) {
+    if (opts?.demo) {
+      const fresh = (Object.keys(activeCase.stageStates) as Stage[])
+        .every(s => activeCase.stageStates[s].initialRun.status === "idle");
+      if (fresh) {
+        patchActiveCase(c => ({ ...c, activeStage: "stage4",
+          forms: { ...c.forms, ...DEMO_FORMS.stage4 } }));
+      } else {
+        const c = makeCase();
+        c.activeStage = "stage4";
+        c.forms = { ...c.forms, ...DEMO_FORMS.stage4 };
+        setCases(prev => [...prev, c]);
+        setActiveCaseId(c.id);
+      }
+      setRawMode(false);
+    }
+    if (window.history.state?.oc !== "app") window.history.pushState({ oc: "app" }, "");
+    setEntered(true);
+  }
+
+  // Back to the landing — pop the history entry pushed by enterApp when present,
+  // so browser Back/Forward stay consistent with what's on screen.
+  function exitToLanding() {
+    if (window.history.state?.oc === "app") window.history.back();
+    else setEntered(false);
+  }
 
   // ─── Case management ─────────────────────────────────────────────
   function createCase() {
@@ -624,6 +668,8 @@ export default function Home() {
 
   // ─── Render ──────────────────────────────────────────────────────
 
+  if (!entered) return <Landing onEnter={enterApp} />;
+
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden",
       background: "oklch(98% 0.01 70)", fontFamily: "var(--font-sans, Manrope, sans-serif)", color: "oklch(24% 0.02 50)" }}>
@@ -633,7 +679,11 @@ export default function Home() {
         padding: "28px 16px", display: "flex", flexDirection: "column", gap: 24,
         height: "100%", overflowY: "auto", background: "white" }}>
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          {/* Logo doubles as "back to intro" — the landing gate stays mounted underneath,
+              so all cases / runs survive the round-trip. */}
+          <button onClick={exitToLanding} title="Back to intro" className="oc-home"
+            style={{ display: "flex", alignItems: "center", gap: 9, background: "transparent",
+              border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
             <svg width="26" height="26" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="OfferCheck logo">
               <defs>
                 <linearGradient id="oc-shield" x1="16" y1="2.5" x2="16" y2="30" gradientUnits="userSpaceOnUse">
@@ -646,8 +696,9 @@ export default function Home() {
               <line x1="17.9" y1="17.7" x2="21.6" y2="21.4" stroke="#FFFFFF" strokeWidth="2.6" strokeLinecap="round" />
               <path d="M11.7 14.1 L13.5 15.9 L16.9 12" stroke="#FFFFFF" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" fill="none" />
             </svg>
-            <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>OfferCheck</div>
-          </div>
+            <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em",
+              color: "oklch(24% 0.02 50)", fontFamily: "var(--font-sans)" }}>OfferCheck</div>
+          </button>
           <div style={{ fontSize: 11.5, color: "oklch(48% 0.02 50)", marginTop: 6, lineHeight: 1.55 }}>
             {UI.tagline}
           </div>
@@ -769,8 +820,8 @@ export default function Home() {
               <div style={{ fontSize: 14, lineHeight: 1.6, color: "oklch(45% 0.02 50)", marginTop: 8 }}>
                 OfferCheck actively investigates <b>this specific opportunity</b> — not just a static
                 company credit score — to catch impersonation scams (fake offers, look-alike domains,
-                bogus HR). Around <b>38% of remote job postings</b> involve some form of scam; run one
-                free check before you sign or pay anything.
+                bogus HR). Run one free check <b>before you sign or pay anything</b> — every claim
+                comes with a source.
               </div>
             </div>
           )}

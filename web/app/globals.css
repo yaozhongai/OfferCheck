@@ -41,3 +41,85 @@ body {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ─── Landing (entry screen) ─────────────────────────────────────── */
+
+@keyframes ocFadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes ocStepIn {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Rubber-stamp thunk for the verdict card */
+@keyframes ocStampIn {
+  0%   { opacity: 0; transform: scale(1.7) rotate(-11deg); }
+  62%  { opacity: 1; transform: scale(0.96) rotate(-2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-3deg); }
+}
+
+/* Terminal caret — same ▍ glyph the app streams answers with */
+@keyframes ocCaret {
+  0%, 54% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
+.oc-cta {
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+.oc-cta:hover { transform: translateY(-1px); filter: brightness(1.06); }
+.oc-cta:active { transform: translateY(0); }
+.oc-quiet { transition: color 0.15s ease, border-color 0.15s ease; }
+.oc-quiet:hover { color: oklch(30% 0.06 40) !important; border-color: oklch(70% 0.08 40) !important; }
+.oc-cta:focus-visible, .oc-quiet:focus-visible {
+  outline: 3px solid oklch(58% 0.13 40 / 0.45);
+  outline-offset: 2px;
+}
+@media (max-width: 720px) {
+  .oc-header-tag { display: none !important; }
+}
+/* Stage cards on the landing's second screen */
+.oc-card {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.oc-card:hover {
+  border-color: oklch(75% 0.09 40);
+  box-shadow: 0 8px 22px -10px oklch(58% 0.13 40 / 0.3);
+  transform: translateY(-2px);
+}
+/* Sidebar logo = back-to-intro */
+.oc-home { transition: opacity 0.15s ease; }
+.oc-home:hover { opacity: 0.72; }
+.oc-home:focus-visible {
+  outline: 3px solid oklch(58% 0.13 40 / 0.45);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
+.oc-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Scroll cue: quiet text, gently bobbing arrow */
+@keyframes ocBob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
+}
+.oc-bob {
+  display: inline-block;
+  animation: ocBob 1.6s ease-in-out infinite;
+}
+.oc-cue { transition: color 0.15s ease; }
+.oc-cue:hover { color: oklch(58% 0.13 40) !important; }
+.oc-cue:focus-visible {
+  outline: 3px solid oklch(58% 0.13 40 / 0.45);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-anim, .oc-bob { animation: none !important; }
+}
