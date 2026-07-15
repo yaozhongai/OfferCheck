@@ -416,6 +416,7 @@ export default function Home() {
           sources: evt.sources ?? prev.sources,
           verdict: evt.verdict ?? prev.verdict,   // structured verdict (review 3.2)
           success: evt.success, latency_ms: evt.latency_ms, trials_used: evt.trials_used,
+          metrics: evt.metrics ?? prev.metrics,
           trace: prev.trace.map(t => t.status === "running" ? { ...t, status: "success" as const } : t) };
       }
 
@@ -885,6 +886,7 @@ export default function Home() {
                 onFollowup={sendSuggestedFollowup}
                 latencyMs={ss.initialRun.latency_ms}
                 trials={ss.initialRun.trials_used}
+                metrics={ss.initialRun.metrics}
                 jumpTargetId="nexa-result-initial"
               />
             </div>
@@ -979,6 +981,7 @@ export default function Home() {
                         onFollowup={sendSuggestedFollowup}
                         latencyMs={f.runState.latency_ms}
                         trials={f.runState.trials_used}
+                        metrics={f.runState.metrics}
                         jumpTargetId={`nexa-result-followup-${i}`}
                       />
                     </div>
@@ -1232,4 +1235,3 @@ export default function Home() {
     </div>
   );
 }
-

@@ -29,6 +29,7 @@ from server.security import (
     enforce_run_quota, validate_image_path, clamp_run_limits, RUN_CONCURRENCY,
 )
 from nexa_agent.logger import get_logger
+from nexa_agent.run_metrics import build_run_metrics
 
 logger = get_logger("api_run_stage")
 router = APIRouter(prefix="/api/v0", tags=["run_stage"])
@@ -94,6 +95,7 @@ def run_stage(request: RunStageRequest, http_request: Request) -> RunStageRespon
             "completion_tokens": result.total_completion_tokens,
             "total_tokens": result.total_tokens,
         },
+        metrics=build_run_metrics(result, latency_ms),
     )
 
 
@@ -151,13 +153,14 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
                 answer_mode=bool(request.answer_mode),
                 output_lang=request.output_lang,
             )
+            latency_ms = round((time.time() - t0) * 1000)
             event_q.put({
                 "type": "done",
                 "success": result.success,
                 "answer": result.answer,
                 "trials_used": result.trials_used,
                 "reflections": result.reflections,
-                "latency_ms": round((time.time() - t0) * 1000),
+                "latency_ms": latency_ms,
                 "stage": effective_stage,
                 "verdict": result.verdict,  # 结构化裁定（评审 3.2），additive
                 "usage": {                   # Token 用量（评审 3.6），additive
@@ -165,6 +168,7 @@ async def run_stage_stream(request: RunStageRequest, http_request: Request) -> S
                     "completion_tokens": result.total_completion_tokens,
                     "total_tokens": result.total_tokens,
                 },
+                "metrics": build_run_metrics(result, latency_ms),
             })
         except Exception as exc:  # noqa: BLE001
             logger.error("run_stage/stream 引擎异常: %s", exc, exc_info=True)

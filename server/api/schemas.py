@@ -93,6 +93,10 @@ class RunStageResponse(BaseModel):
     latency_ms: float = 0.0
     verdict: Optional[Dict[str, Any]] = Field(None, description="结构化裁定（评审 3.2）：submit_verdict 路径直传，供前端裁定卡免文本解析")
     usage: Optional[Dict[str, int]] = Field(None, description="Token 用量（评审 3.6）：{prompt_tokens, completion_tokens, total_tokens}，调查主循环成本指标")
+    metrics: Optional[Dict[str, Any]] = Field(
+        None,
+        description="本次调查绝对指标：耗时、步数、来源数、Token 与可选成本估算",
+    )
 
 
 # ---------------------------------------------------------------------------

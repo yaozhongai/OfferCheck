@@ -46,6 +46,7 @@ export type EngineEvent = {
   verdict?: EngineVerdict; // structured verdict from the engine (review 3.2)
   trials_used?: number;
   latency_ms?: number;
+  metrics?: RunMetrics;
 };
 
 export type SourceItem = { url: string; domain: string; context?: string; verified?: boolean };
@@ -59,6 +60,21 @@ export type EngineVerdict = {
   summary: string;
   red_flags?: string[];
   need_user_confirm?: string[];
+};
+
+export type RunMetrics = {
+  success: boolean;
+  duration_ms: number;
+  duration_seconds: number;
+  trials: number;
+  steps: number;
+  sources: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd?: number | null;
+  cost_configured: boolean;
+  cost_note?: string;
 };
 
 export type StepStatus = "running" | "success" | "notfound" | "error" | "cache";
@@ -87,6 +103,7 @@ export type RunState = {
   success?: boolean;
   latency_ms?: number;
   trials_used?: number;
+  metrics?: RunMetrics;
   errorMsg?: string;
   maxSteps?: number;
   currentStep?: number;            // per-trial step number from the latest step_start event
@@ -176,10 +193,9 @@ export const STAGE_FIELDS: Record<Stage, FieldSpec[]> = {
 };
 
 // One-click demo presets — lets a judge/first-time visitor run a real
-// investigation without typing. stage1 is a grounded "happy path" (a real,
-// reputable company → low-risk verdict); stage3/4 use clearly fictitious
-// entities showing textbook overseas-job-scam red flags. Never name a real
-// company in a fraud example.
+// investigation without typing. The Apple stage-4 item is explicitly labelled
+// as a synthetic scenario: it tests evidence collection about an impersonation
+// attempt and does not allege misconduct by Apple.
 export const DEMO_FORMS: Record<Stage, Record<string, string>> = {
   stage1: {
     company: "Anthropic",
@@ -196,9 +212,9 @@ export const DEMO_FORMS: Record<Stage, Record<string, string>> = {
     recruiter: "‘HR Manager’, contact only via Telegram @hr_fastjobs, no company email.",
   },
   stage4: {
-    offer: "Offer Letter — Nexora Global Solutions Ltd.\nPosition: Remote Financial Operations Associate (no interview required)\nCompensation: USD 9,200 / month, paid weekly in USDT (crypto).\nLocation: 100% remote, flexible hours, immediate start.\nSigning entity: Everbright Holdings Group (Hong Kong).\nOnboarding: purchase a $320 equipment & software kit from our partner vendor; fully reimbursed in your first paycheck.\nNote: limited positions, please confirm within 24 hours.",
-    hr: "Telegram @nexora_hr only (no corporate email address provided)",
-    link: "",
+    offer: "Synthetic demo case — an email claims to be an Apple offer for a remote Data Entry Specialist role. There was no application or formal interview. Before onboarding, the sender asks for a $200 Apple Gift Card as a ‘background-check fee’ and promises reimbursement in the first paycheck. Verify the official recruiting channel, the sender-domain provenance, and official gift-card scam guidance before giving a verdict.",
+    hr: "recruiter@apple-hiring-team.com",
+    link: "https://jobs.apple.com/en-us/search",
   },
 };
 
@@ -1093,9 +1109,10 @@ export function jumpToAnchor(id: string) {
 }
 
 export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTargetId,
-  summaryForUser, suggestedFollowups, onFollowup }: {
+  summaryForUser, suggestedFollowups, onFollowup, metrics }: {
   parsed: ParsedAnswer; prevVerdict?: string; latencyMs?: number; trials?: number; jumpTargetId?: string;
   summaryForUser?: string; suggestedFollowups?: string[]; onFollowup?: (q: string) => void;
+  metrics?: RunMetrics;
 }) {
   const vs = parsed.verdictLabel && (parsed.verdictLabel in VERDICT_STYLES)
     ? VERDICT_STYLES[parsed.verdictLabel as VerdictKey] : null;
@@ -1178,6 +1195,30 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
         </div>
       )}
 
+      {/* Absolute run metrics. These values come from the same server-side run
+          that produced the verdict; cost appears only when deployment pricing
+          is explicitly configured. */}
+      {metrics && (
+        <div aria-label="Investigation metrics" style={{ display: "flex", flexWrap: "wrap",
+          gap: 5, marginTop: 2, fontSize: 11.5, color: "oklch(45% 0.025 50)" }}>
+          {[
+            `${metrics.duration_seconds}s`,
+            `${metrics.steps} steps`,
+            `${metrics.sources} sources`,
+            `${metrics.total_tokens.toLocaleString()} tokens`,
+            metrics.cost_configured && metrics.estimated_cost_usd != null
+              ? `est. $${metrics.estimated_cost_usd < 0.01
+                  ? metrics.estimated_cost_usd.toFixed(4)
+                  : metrics.estimated_cost_usd.toFixed(2)}`
+              : "",
+          ].filter(Boolean).map((item, i) => (
+            <span key={i} style={{ background: "oklch(96% 0.01 70)",
+              border: "1px solid oklch(89% 0.015 70)", borderRadius: 999,
+              padding: "2px 7px", fontVariantNumeric: "tabular-nums" }}>{item}</span>
+          ))}
+        </div>
+      )}
+
       {/* Suggested follow-ups (engine-provided) — click to run as a grounded turn */}
       {suggestedFollowups && suggestedFollowups.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 2 }}>
@@ -1200,7 +1241,7 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
       {/* Follow-up invite + latency */}
       <div style={{ fontSize: 12.5, color: "oklch(55% 0.02 50)" }}>
         Ask a follow-up to dig into any point.
-        {latencyMs ? (
+        {!metrics && latencyMs ? (
           <span style={{ marginLeft: 6 }}>
             ({Math.round(latencyMs / 1000)}s{trials ? ` · ${trials} trial` : ""})
           </span>

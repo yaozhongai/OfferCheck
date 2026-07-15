@@ -69,6 +69,7 @@ class TraceRecorder:
         self._input_tokens = 0
         self._output_tokens = 0
         self._verdict = None
+        self._metrics = None
 
     def record(self, event: dict) -> None:
         """缓冲一条事件（best-effort，绝不抛）。__end__ 哨兵不记。"""
@@ -96,6 +97,8 @@ class TraceRecorder:
                 self._output_tokens += int(event.get("completion_tokens") or 0)
             if et in (EngineEventType.DONE.value, EngineEventType.FINAL_ANSWER.value) and event.get("verdict"):
                 self._verdict = event["verdict"]
+            if et == EngineEventType.DONE.value and event.get("metrics"):
+                self._metrics = event["metrics"]
         except Exception:  # noqa: BLE001 — 可观测绝不影响主流程
             logger.debug("trace record 异常（已忽略）", exc_info=True)
 
@@ -121,6 +124,7 @@ class TraceRecorder:
                     "total_tokens": self._input_tokens + self._output_tokens,
                 },
                 "verdict": self._verdict,
+                "metrics": self._metrics,
                 "spans": self._spans,
             }
             path = os.path.join(self.trace_dir, f"{self.trace_id}.json")
