@@ -9,7 +9,7 @@ import {
   STAGE_META, UI, tm, TOOL_LEGEND, summarizeArgs, withEngineSources, withEngineVerdict,
   parseStructuredAnswer, buildFollowupContext, buildInput, valid, summary, inputStyle,
   buildCrossStageEntries, completedEarlierStages, ConvTurn, FollowupContext, CrossStageEntry,
-  InlineTrace, ChatSummary, StructuredResult, StageForm,
+  InlineTrace, ChatSummary, StructuredResult, StageForm, Markdown,
   apiUrl, DEMO_FORMS, STAGE_FIELDS,
 } from "./ui";
 
@@ -953,11 +953,15 @@ export default function Home() {
                   const bubbleStyle: React.CSSProperties = { maxWidth: "92%", background: "white",
                     border: "1px solid oklch(90% 0.012 70)", fontSize: 13.5, lineHeight: 1.65,
                     color: "oklch(30% 0.02 50)", padding: "11px 14px", borderRadius: "3px 12px 12px 12px" };
-                  // Non-verdict → conversational answer-mode reply: render the full text.
-                  if (!parsed.verdictLabel) {
+                  // Non-verdict → conversational answer-mode reply: render the full
+                  // markdown text. Route on verdictExplicit — answer-mode replies in
+                  // an anti-scam product are full of "scam"/"suspicious"/「推荐」, and
+                  // the keyword-guessed verdictLabel must not hijack them into the
+                  // verdict-card path (which truncates the reply to a teaser).
+                  if (!parsed.verdictExplicit) {
                     return (
-                      <div style={{ ...bubbleStyle, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {f.runState.answer}
+                      <div style={{ ...bubbleStyle, wordBreak: "break-word" }}>
+                        <Markdown>{f.runState.answer}</Markdown>
                         {f.runState.latency_ms ? (
                           <div style={{ fontSize: 12, color: "oklch(58% 0.02 50)", marginTop: 6 }}>
                             ({Math.round(f.runState.latency_ms / 1000)}s)
@@ -966,11 +970,17 @@ export default function Home() {
                       </div>
                     );
                   }
-                  // Verdict → the model chose to re-investigate: show the structured summary.
-                  const prevAnswer = i > 0
-                    ? (ss.followups[i - 1].runState.answer ?? "")
-                    : (ss.initialRun.answer ?? "");
-                  const prevVerdict = parseStructuredAnswer(prevAnswer).verdictLabel || undefined;
+                  // Verdict → the model chose to re-investigate: show the structured
+                  // summary. Compare against the nearest EARLIER explicit verdict —
+                  // conversational turns in between carry no verdict to compare with.
+                  let prevVerdict: string | undefined;
+                  for (let j = i - 1; j >= -1 && prevVerdict === undefined; j--) {
+                    const a = j >= 0 ? ss.followups[j].runState.answer : ss.initialRun.answer;
+                    if (!a) continue;
+                    const prev = withEngineVerdict(parseStructuredAnswer(a),
+                      j >= 0 ? ss.followups[j].runState.verdict : ss.initialRun.verdict);
+                    if (prev.verdictExplicit && prev.verdictLabel) prevVerdict = prev.verdictLabel;
+                  }
                   return (
                     <div style={bubbleStyle}>
                       <ChatSummary
@@ -1193,7 +1203,9 @@ export default function Home() {
 
                 // Conversational answer-mode follow-ups (no verdict) live in the chat only —
                 // the board updates only when there's genuinely new structured evidence.
-                if (r.isFollowup && r.run.status !== "error" && parsed && !parsed.verdictLabel) return null;
+                // verdictExplicit, not verdictLabel: a keyword-guessed label on a chatty
+                // reply must not smuggle it onto the board as a bogus verdict card.
+                if (r.isFollowup && r.run.status !== "error" && parsed && !parsed.verdictExplicit) return null;
 
                 return (
                   <div key={idx}>

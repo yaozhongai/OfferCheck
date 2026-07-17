@@ -140,6 +140,14 @@ export type ParsedAnswer = {
   verdictLabel: string;  // canonical key for VERDICT_STYLES, e.g. "靠谱"
   verdictRaw: string;    // label exactly as the model wrote it (e.g. "Likely a Scam") — for the subtitle
   verdictReason: string; // text after " — " on the verdict line
+  // True only when the verdict comes from an authoritative signal: a literal
+  // [Verdict] line or the engine's structured verdict. False when verdictLabel
+  // was merely GUESSED from keywords in free text (fallback) — conversational
+  // answer-mode replies in an anti-scam product naturally contain "scam"/
+  // "suspicious"/「推荐」, and routing them into the verdict-card UI truncates
+  // the reply to a 200-char teaser with a bogus pill. Route on THIS, not on
+  // verdictLabel.
+  verdictExplicit: boolean;
   facts: { text: string; confidence: string; url?: string }[];
   redFlags: { text: string }[];
   sources: SourceItem[];
@@ -336,7 +344,7 @@ export function extractURLs(text: string): { url: string; domain: string; contex
 }
 
 export function parseStructuredAnswer(text: string): ParsedAnswer {
-  if (!text) return { verdictLabel: "", verdictRaw: "", verdictReason: "", facts: [], redFlags: [], sources: [], rawText: "" };
+  if (!text) return { verdictLabel: "", verdictRaw: "", verdictReason: "", verdictExplicit: false, facts: [], redFlags: [], sources: [], rawText: "" };
 
   const lines = text.split(/\r?\n/);
   const facts: ParsedAnswer["facts"] = [];
@@ -344,10 +352,12 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
   let verdictLabel = "";
   let verdictRaw = "";
   let verdictReason = "";
+  let verdictExplicit = false;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (line.startsWith("[Verdict]")) {
+      verdictExplicit = true;
       const content = line.slice("[Verdict]".length).trim();
       const knownVerdicts = Object.keys(VERDICT_STYLES);
       // Separator between label and reason: the model emits a run of em/en
@@ -394,7 +404,9 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
 
   const sources = extractURLs(text);
 
-  // Fallback: if no structured markers found, try to detect verdict from full text
+  // Fallback: if no structured markers found, try to detect verdict from full text.
+  // This is a GUESS (verdictExplicit stays false) — good enough for styling, but
+  // never for deciding whether a reply IS a verdict (see verdictExplicit docs).
   if (!verdictLabel) {
     const detected = detectVerdict(text);
     if (detected) {
@@ -407,7 +419,7 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
     }
   }
 
-  return { verdictLabel, verdictRaw, verdictReason, facts, redFlags, sources, rawText: text };
+  return { verdictLabel, verdictRaw, verdictReason, verdictExplicit, facts, redFlags, sources, rawText: text };
 }
 
 // Prefer engine-provided structured sources over regex-extracted ones (problem 5).
@@ -430,6 +442,7 @@ export function withEngineVerdict(parsed: ParsedAnswer, v?: EngineVerdict): Pars
     verdictLabel: label,
     verdictRaw: v.verdict,
     verdictReason: v.summary || parsed.verdictReason,
+    verdictExplicit: true, // engine-authoritative — the run really ended in submit_verdict
   };
 }
 
@@ -471,7 +484,9 @@ export function buildFollowupContext(
   // answers → raw excerpt (they often contain requests/instructions to the user).
   const history: FollowupHistoryTurn[] = turns.slice(-3).map(t => {
     const parsed = parseStructuredAnswer(t.answer);
-    const assistant: FollowupAssistant = parsed.verdictLabel
+    // Explicit verdicts only — a chatty turn with a guessed label would be
+    // compacted into a bogus verdict form and lose its actual content.
+    const assistant: FollowupAssistant = parsed.verdictExplicit && parsed.verdictLabel
       ? {
           verdict: parsed.verdictLabel,
           reason: parsed.verdictReason.slice(0, 250),
@@ -486,7 +501,7 @@ export function buildFollowupContext(
   let priorSources: string[] = [];
   for (let i = turns.length - 1; i >= 0; i--) {
     const parsed = parseStructuredAnswer(turns[i].answer);
-    if (parsed.verdictLabel) { priorSources = parsed.sources.slice(0, 8).map(s => s.url); break; }
+    if (parsed.verdictExplicit && parsed.verdictLabel) { priorSources = parsed.sources.slice(0, 8).map(s => s.url); break; }
   }
 
   const ctx: FollowupContext = {
@@ -562,7 +577,7 @@ export function buildCrossStageEntries(
     const parsed = parseStructuredAnswer(answer);
     return {
       stage: `${meta.num} ${meta.en}`,
-      verdict: parsed.verdictLabel || "未知",
+      verdict: (parsed.verdictExplicit && parsed.verdictLabel) || "未知",
       reason: parsed.verdictReason.slice(0, 250),
       key_facts: parsed.facts.slice(0, 6).map(f => f.text),
       red_flags: parsed.redFlags.slice(0, 4).map(f => f.text),
@@ -822,8 +837,9 @@ export function StructuredResult({ parsed, isFollowup = false, anchorBase }: {
 
   return (
     <div>
-      {/* Verdict header card */}
-      {verdict && vs ? (
+      {/* Verdict header card — explicit verdicts only; a keyword-guessed label on
+          free text must render as plain result text, not a verdict card */}
+      {parsed.verdictExplicit && verdict && vs ? (
         <div style={{ border: `1.5px solid ${vs.accent}`, background: vs.bg, borderRadius: 16,
           padding: "18px 22px", marginBottom: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -844,8 +860,8 @@ export function StructuredResult({ parsed, isFollowup = false, anchorBase }: {
           )}
         </div>
       ) : (
-        /* No structured verdict — check for any answer text */
-        parsed.rawText && !parsed.verdictLabel && (
+        /* No structured verdict — show the answer text in full */
+        parsed.rawText && !parsed.verdictExplicit && (
           <div style={{ background: "white", border: "1px solid oklch(90% 0.012 70)", borderRadius: 14,
             padding: "16px 20px", marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.02 50)", marginBottom: 8 }}>
@@ -911,7 +927,7 @@ export function StructuredResult({ parsed, isFollowup = false, anchorBase }: {
       )}
 
       {/* If no structured facts/flags but has raw text with verdict, show raw text collapsed */}
-      {verdict && parsed.facts.length === 0 && parsed.redFlags.length === 0 && parsed.rawText && (
+      {parsed.verdictExplicit && verdict && parsed.facts.length === 0 && parsed.redFlags.length === 0 && parsed.rawText && (
         <CollapsibleCard title="Details" defaultOpen={false}>
           <div style={{ fontSize: 13.5, lineHeight: 1.7, color: "oklch(28% 0.02 50)",
             whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 400, overflowY: "auto" }}>
@@ -1152,8 +1168,10 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {/* Verdict — a compact colored pill for a glance. The full labelled card
-          (with the reason) lives on the Evidence Board; we don't repeat it here. */}
-      {parsed.verdictLabel ? (
+          (with the reason) lives on the Evidence Board; we don't repeat it here.
+          Route on verdictExplicit: a keyword-guessed label must NOT collapse a
+          conversational reply into a pill + teaser (the reply text would be lost). */}
+      {parsed.verdictExplicit && parsed.verdictLabel ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {prevVerdict !== undefined && (
             <span style={{ fontSize: 12, color: "oklch(52% 0.02 50)" }}>
@@ -1171,18 +1189,20 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
       )}
 
       {/* User-facing summary (engine-provided, grounded). Falls back to the verdict
-          reason only when no summary was produced (older / free-text answers). */}
+          reason only when no summary was produced (older / free-text answers).
+          Guessed (non-explicit) verdictReason is a 200-char teaser that would
+          duplicate the full fallback text above — never show it. */}
       {summaryForUser ? (
         <div style={{ lineHeight: 1.65, color: "oklch(32% 0.02 50)" }}><Markdown>{summaryForUser}</Markdown></div>
       ) : (
-        parsed.verdictLabel && parsed.verdictReason && (
+        parsed.verdictExplicit && parsed.verdictLabel && parsed.verdictReason && (
           <div style={{ lineHeight: 1.65, color: "oklch(32% 0.02 50)" }}><Markdown>{parsed.verdictReason}</Markdown></div>
         )
       )}
 
       {/* Positive-signal heads-up — symmetric counterpart of the red-flag row, so a
           favourable verdict has visual structure instead of a bare wall of prose */}
-      {vs?.tone === "positive" && factCount > 0 && (
+      {parsed.verdictExplicit && vs?.tone === "positive" && factCount > 0 && (
         <div style={{ color: "oklch(38% 0.1 145)", lineHeight: 1.6 }}>
           ✓ {factCount} supporting signal{factCount > 1 ? "s" : ""}: {parsed.facts.slice(0, 2).map(f => f.text).join("; ")}
           {factCount > 2 ? " …" : ""}
@@ -1227,12 +1247,15 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
       {metrics && (
         <div aria-label="Investigation metrics" style={{ display: "flex", flexWrap: "wrap",
           gap: 5, marginTop: 2, fontSize: 11.5, color: "oklch(45% 0.025 50)" }}>
+          {/* Guard every field: a metrics object with missing numbers (older
+              persisted runs, partial SSE payloads) must degrade to fewer chips,
+              not throw mid-render and take the whole page to the error boundary. */}
           {[
-            `${metrics.duration_seconds}s`,
-            `${metrics.steps} steps`,
-            `${metrics.sources} sources`,
-            `${metrics.total_tokens.toLocaleString()} tokens`,
-            metrics.cost_configured && metrics.estimated_cost_usd != null
+            Number.isFinite(metrics.duration_seconds) ? `${metrics.duration_seconds}s` : "",
+            Number.isFinite(metrics.steps) ? `${metrics.steps} steps` : "",
+            Number.isFinite(metrics.sources) ? `${metrics.sources} sources` : "",
+            Number.isFinite(metrics.total_tokens) ? `${metrics.total_tokens.toLocaleString()} tokens` : "",
+            metrics.cost_configured && typeof metrics.estimated_cost_usd === "number"
               ? `est. $${metrics.estimated_cost_usd < 0.01
                   ? metrics.estimated_cost_usd.toFixed(4)
                   : metrics.estimated_cost_usd.toFixed(2)}`
