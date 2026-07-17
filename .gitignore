@@ -109,3 +109,4 @@ pytest.ini
 nexa_agent/results/
 /report_*.json
 waic_roadshow.xml
+outputs/

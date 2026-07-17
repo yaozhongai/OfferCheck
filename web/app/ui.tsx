@@ -283,23 +283,36 @@ export const TOOL_LEGEND = [
 // ─── Verdict styles ────────────────────────────────────────────────────────────
 
 export type VerdictKey = keyof typeof VERDICT_STYLES;
+// KEY ORDER MATTERS: parseStructuredAnswer matches labels via
+// Object.keys().find(v => candidate.includes(v)), so longer/negated labels must
+// come before their substrings（「不推荐」⊃「推荐」、「谨慎投递」⊃「谨慎」）.
+// `tone` drives positive/negative affordances (e.g. the ✓ supporting-signals row).
 export const VERDICT_STYLES = {
-  "值得投递":  { bg: "oklch(96% 0.03 145)",  fg: "oklch(28% 0.1 145)",  accent: "oklch(52% 0.13 145)", en: "Worth Applying" },
-  "谨慎投递":  { bg: "oklch(96% 0.035 80)",  fg: "oklch(34% 0.1 80)",   accent: "oklch(60% 0.14 80)",  en: "Proceed with Caution" },
-  "建议放弃":  { bg: "oklch(96% 0.035 25)",  fg: "oklch(33% 0.12 25)",  accent: "oklch(52% 0.16 25)",  en: "Recommend Skipping" },
-  "靠谱":      { bg: "oklch(96% 0.03 145)",  fg: "oklch(28% 0.1 145)",  accent: "oklch(52% 0.13 145)", en: "Looks Legit" },
-  "存疑":      { bg: "oklch(96% 0.035 80)",  fg: "oklch(34% 0.1 80)",   accent: "oklch(60% 0.14 80)",  en: "Suspicious" },
-  "大概率有坑":{ bg: "oklch(96% 0.035 25)", fg: "oklch(33% 0.12 25)",  accent: "oklch(52% 0.16 25)",  en: "Likely a Scam" },
+  "谨慎投递":  { bg: "oklch(96% 0.035 80)",  fg: "oklch(34% 0.1 80)",   accent: "oklch(60% 0.14 80)",  en: "Proceed with Caution", tone: "caution" },
+  "不推荐":    { bg: "oklch(96% 0.035 25)",  fg: "oklch(33% 0.12 25)",  accent: "oklch(52% 0.16 25)",  en: "Not Recommended",      tone: "negative" },
+  "谨慎":      { bg: "oklch(96% 0.035 80)",  fg: "oklch(34% 0.1 80)",   accent: "oklch(60% 0.14 80)",  en: "Proceed with Caution", tone: "caution" },
+  "推荐":      { bg: "oklch(96% 0.03 145)",  fg: "oklch(28% 0.1 145)",  accent: "oklch(52% 0.13 145)", en: "Recommended",          tone: "positive" },
+  "值得投递":  { bg: "oklch(96% 0.03 145)",  fg: "oklch(28% 0.1 145)",  accent: "oklch(52% 0.13 145)", en: "Worth Applying",       tone: "positive" },
+  "建议放弃":  { bg: "oklch(96% 0.035 25)",  fg: "oklch(33% 0.12 25)",  accent: "oklch(52% 0.16 25)",  en: "Recommend Skipping",   tone: "negative" },
+  "靠谱":      { bg: "oklch(96% 0.03 145)",  fg: "oklch(28% 0.1 145)",  accent: "oklch(52% 0.13 145)", en: "Looks Legit",          tone: "positive" },
+  "存疑":      { bg: "oklch(96% 0.035 80)",  fg: "oklch(34% 0.1 80)",   accent: "oklch(60% 0.14 80)",  en: "Suspicious",           tone: "caution" },
+  "大概率有坑":{ bg: "oklch(96% 0.035 25)", fg: "oklch(33% 0.12 25)",  accent: "oklch(52% 0.16 25)",  en: "Likely a Scam",        tone: "negative" },
 };
 
 export function detectVerdict(text: string): VerdictKey | null {
   if (!text) return null;
-  if (text.includes("大概率有坑") || text.toLowerCase().includes("likely a scam")) return "大概率有坑";
-  if (text.includes("存疑") || text.toLowerCase().includes("suspicious")) return "存疑";
-  if (text.includes("靠谱") || text.toLowerCase().includes("looks legit")) return "靠谱";
-  if (text.includes("值得投递") || text.toLowerCase().includes("worth applying")) return "值得投递";
-  if (text.includes("谨慎投递") || text.toLowerCase().includes("caution")) return "谨慎投递";
-  if (text.includes("建议放弃") || text.toLowerCase().includes("recommend skipping")) return "建议放弃";
+  const lower = text.toLowerCase();
+  if (text.includes("大概率有坑") || lower.includes("likely a scam")) return "大概率有坑";
+  if (text.includes("存疑") || lower.includes("suspicious")) return "存疑";
+  if (text.includes("靠谱") || lower.includes("looks legit")) return "靠谱";
+  if (text.includes("值得投递") || lower.includes("worth applying")) return "值得投递";
+  if (text.includes("谨慎投递")) return "谨慎投递";
+  if (text.includes("建议放弃") || lower.includes("recommend skipping")) return "建议放弃";
+  // 子串陷阱：「不推荐」⊃「推荐」、"not recommended" ⊃ "recommended" —— 否定档先测。
+  // 顺序对齐后端 _match_verdict_keywords 的分级优先级：不推荐(scam) → 谨慎(susp) → 推荐(reliable)
+  if (text.includes("不推荐") || lower.includes("not recommended")) return "不推荐";
+  if (text.includes("谨慎") || lower.includes("caution")) return "谨慎";
+  if (text.includes("推荐") || lower.includes("recommended")) return "推荐";
   return null;
 }
 
@@ -367,7 +380,11 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
       // Extract URL if present inline
       const urlMatch = content.match(/https?:\/\/[^\s，。、；""'']+/);
       const url = urlMatch ? urlMatch[0].replace(/[.,;:!?]+$/, "") : undefined;
-      const cleanText = url ? content.replace(url, "").replace(/\s*[—–-]{1,2}\s*$/, "").trim() : content;
+      const cleanText = (url ? content.replace(url, "") : content)
+        // strip the bare "[Source]" tag left behind once its URL moved into the link
+        // (keep it when followed by a tool name etc. — that text is informative)
+        .replace(/\[Source\]\s*[:：]?\s*[()（）]*\s*$/i, "")
+        .replace(/\s*[—–-]{1,2}\s*$/, "").trim();
       facts.push({ text: cleanText, confidence, url });
     } else if (line.startsWith("[RedFlag]")) {
       const content = line.slice("[RedFlag]".length).trim();
@@ -1161,6 +1178,15 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
         parsed.verdictLabel && parsed.verdictReason && (
           <div style={{ lineHeight: 1.65, color: "oklch(32% 0.02 50)" }}><Markdown>{parsed.verdictReason}</Markdown></div>
         )
+      )}
+
+      {/* Positive-signal heads-up — symmetric counterpart of the red-flag row, so a
+          favourable verdict has visual structure instead of a bare wall of prose */}
+      {vs?.tone === "positive" && factCount > 0 && (
+        <div style={{ color: "oklch(38% 0.1 145)", lineHeight: 1.6 }}>
+          ✓ {factCount} supporting signal{factCount > 1 ? "s" : ""}: {parsed.facts.slice(0, 2).map(f => f.text).join("; ")}
+          {factCount > 2 ? " …" : ""}
+        </div>
       )}
 
       {/* Red-flag heads-up */}

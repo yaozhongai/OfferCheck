@@ -71,7 +71,7 @@ def assemble_followup_input(
 def assemble_initial_input(task: str, carryover: Optional[list[dict]] = None) -> str:
     """把本案早前阶段已取证结论作为参考前缀拼到本阶段任务前。
 
-    产出格式与前端旧 buildCrossStageContext + startInitial 前缀一致；接地不弱化：
+    产出格式与前端旧 buildCrossStageContext + startInitial 前缀一致；证据优先不弱化：
     明示「新裁定仍须独立取证核实」，evidence gate / Verifier 照常。
     """
     if not carryover:

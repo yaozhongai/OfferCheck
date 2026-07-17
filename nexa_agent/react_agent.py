@@ -33,6 +33,7 @@ ReAct Agent 实验入口
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -530,10 +531,25 @@ def _as_str_list(v) -> list:
     单个字符串——若直接 `for x in v` 会按字符遍历，导致每个字符渲染成一条 [Fact]/
     [RedFlag]（曾见 663 条单字符事实）。这里统一：str→单元素、非序列→单元素、
     序列→逐项 str，并丢掉空串。
+
+    字符串还有一种形态是 double-encode 的 JSON 数组（GMI instruct 模型偶发
+    `"evidence": "[\\"a\\", \\"b\\"]"`）：不解开的话整串 JSON 会以 `[` 开头、
+    被 _render_verdict 的标签豁免原样放进答案，前端解析出 0 条 facts 并把
+    生 JSON 展示给用户。这里先尝试解成真数组，失败再按单元素字符串处理。
     """
     if not v:
         return []
-    if isinstance(v, str) or not isinstance(v, (list, tuple)):
+    if isinstance(v, str):
+        raw = v.strip()
+        v = [v]
+        if raw.startswith("[") and raw.endswith("]"):
+            try:
+                decoded = json.loads(raw)
+                if isinstance(decoded, list):
+                    v = decoded
+            except json.JSONDecodeError:
+                pass
+    elif not isinstance(v, (list, tuple)):
         v = [v]
     return [s for s in (str(x).strip() for x in v) if s]
 
@@ -557,6 +573,16 @@ def _evidence_all_unsourced(items: list) -> bool:
     return True
 
 
+# 条目自带标签时豁免二次打标。只认这组已知标签——不能用裸 `startswith("[")`：
+# double-encode 的 JSON 数组、"[2024] 融资" 这类正常内容同样以 [ 开头，会被
+# 误豁免而绕过 [Fact] 打标，前端随即解析出 0 条 facts。
+_ITEM_TAGS = ("[Fact]", "[RedFlag]", "[Source]", "[NeedUserConfirm]", "[Confidence]")
+
+
+def _has_item_tag(s: str) -> bool:
+    return s.lstrip().startswith(_ITEM_TAGS)
+
+
 def _render_verdict(fields: dict) -> str:
     """把 submit_verdict 的结构化字段渲染为标准裁定文本。"""
     lines = []
@@ -564,13 +590,11 @@ def _render_verdict(fields: dict) -> str:
     summary = (fields.get("summary") or "").strip()
     lines.append(f"[Verdict] {verdict} —— {summary}".rstrip(" —"))
     for ev in _as_str_list(fields.get("evidence")):
-        # 模型可能已在 evidence 里自带 [Fact]/[Source]/[Confidence] 标签，
-        # 此时原样保留，避免出现 "[Fact] [Fact] ..." 双标签
-        lines.append(ev if ev.lstrip().startswith("[") else f"[Fact] {ev}")
+        lines.append(ev if _has_item_tag(ev) else f"[Fact] {ev}")
     for rf in _as_str_list(fields.get("red_flags")):
-        lines.append(rf if rf.lstrip().startswith("[") else f"[RedFlag] {rf}")
+        lines.append(rf if _has_item_tag(rf) else f"[RedFlag] {rf}")
     for nc in _as_str_list(fields.get("need_user_confirm")):
-        lines.append(nc if nc.lstrip().startswith("[") else f"[NeedUserConfirm] {nc}")
+        lines.append(nc if _has_item_tag(nc) else f"[NeedUserConfirm] {nc}")
     return "\n".join(lines)
 
 
@@ -1016,7 +1040,7 @@ def react_loop(
             "role": "user",
             "content": (
                 "[系统拦截] 你尚未通过任何检索工具查证，就给出了裁定/事实结论——"
-                "这违反接地铁律。严禁凭记忆或常识断言公司/域名/招聘方信息。"
+                "这违反证据优先原则。严禁凭记忆或常识断言公司/域名/招聘方信息。"
                 "请立即调用 web_search / web_fetch / domain_whois_lookup 等工具"
                 "实际取证，每条结论都要绑定真实工具返回的来源，然后再下裁定。"
             ),
@@ -1380,7 +1404,7 @@ def react_loop(
 
         parsed = parse_llm_response(response_text)
         # 兜底答案统一走 _finalize：补上 AIS 来源对账 + structured_sources + final_answer
-        # 事件——这是最可能证据不全的路径，此前手工拼 dict 反而绕过了接地层（评审 1.5）。
+        # 事件——这是最可能证据不全的路径，此前手工拼 dict 反而绕过了证据优先层（评审 1.5）。
         final_answer = parsed["final_answer"] if parsed["final_answer"] else response_text.strip()
         if not parsed["final_answer"]:
             logger.info("兜底汇总未找到 Final Answer 标记，使用完整响应")
