@@ -150,6 +150,11 @@ export type ParsedAnswer = {
   verdictExplicit: boolean;
   facts: { text: string; confidence: string; url?: string }[];
   redFlags: { text: string }[];
+  // Items the engine could not verify and the user must confirm themselves
+  // ([NeedUserConfirm] lines / engine need_user_confirm). Non-empty means the
+  // verdict ships with an explicit caveat — the UI downgrades its certainty
+  // ("pending verification") instead of presenting a confident conclusion.
+  needUserConfirm: string[];
   sources: SourceItem[];
   rawText: string;
 };
@@ -344,11 +349,12 @@ export function extractURLs(text: string): { url: string; domain: string; contex
 }
 
 export function parseStructuredAnswer(text: string): ParsedAnswer {
-  if (!text) return { verdictLabel: "", verdictRaw: "", verdictReason: "", verdictExplicit: false, facts: [], redFlags: [], sources: [], rawText: "" };
+  if (!text) return { verdictLabel: "", verdictRaw: "", verdictReason: "", verdictExplicit: false, facts: [], redFlags: [], needUserConfirm: [], sources: [], rawText: "" };
 
   const lines = text.split(/\r?\n/);
   const facts: ParsedAnswer["facts"] = [];
   const redFlags: ParsedAnswer["redFlags"] = [];
+  const needUserConfirm: string[] = [];
   let verdictLabel = "";
   let verdictRaw = "";
   let verdictReason = "";
@@ -399,6 +405,10 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
     } else if (line.startsWith("[RedFlag]")) {
       const content = line.slice("[RedFlag]".length).trim();
       if (content) redFlags.push({ text: content });
+    } else if (line.startsWith("[NeedUserConfirm]")) {
+      const content = line.slice("[NeedUserConfirm]".length).trim();
+      // prompts instruct "无则写「无」" — skip the explicit none-markers
+      if (content && !/^(无|None|N\/A)[。.]?$/i.test(content)) needUserConfirm.push(content);
     }
   }
 
@@ -419,7 +429,7 @@ export function parseStructuredAnswer(text: string): ParsedAnswer {
     }
   }
 
-  return { verdictLabel, verdictRaw, verdictReason, verdictExplicit, facts, redFlags, sources, rawText: text };
+  return { verdictLabel, verdictRaw, verdictReason, verdictExplicit, facts, redFlags, needUserConfirm, sources, rawText: text };
 }
 
 // Prefer engine-provided structured sources over regex-extracted ones (problem 5).
@@ -443,6 +453,8 @@ export function withEngineVerdict(parsed: ParsedAnswer, v?: EngineVerdict): Pars
     verdictRaw: v.verdict,
     verdictReason: v.summary || parsed.verdictReason,
     verdictExplicit: true, // engine-authoritative — the run really ended in submit_verdict
+    // Engine's structured list wins over text re-parsing when present.
+    needUserConfirm: v.need_user_confirm?.length ? v.need_user_confirm : parsed.needUserConfirm,
   };
 }
 
@@ -926,6 +938,22 @@ export function StructuredResult({ parsed, isFollowup = false, anchorBase }: {
         </CollapsibleCard>
       )}
 
+      {/* Items the engine could not verify — the user must confirm these themselves.
+          Rendering them is what turns the verdict into an honest, caveated one. */}
+      {parsed.needUserConfirm.length > 0 && (
+        <CollapsibleCard title={`Pending Your Confirmation · ${parsed.needUserConfirm.length}`} accent="oklch(80% 0.07 80)">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {parsed.needUserConfirm.map((t, i) => (
+              <div key={i} style={{ display: "flex", gap: 10 }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: "oklch(60% 0.14 80)",
+                  marginTop: 7, flexShrink: 0 }} />
+                <div style={{ fontSize: 13.5, lineHeight: 1.6, color: "oklch(30% 0.02 50)" }}>{t}</div>
+              </div>
+            ))}
+          </div>
+        </CollapsibleCard>
+      )}
+
       {/* If no structured facts/flags but has raw text with verdict, show raw text collapsed */}
       {parsed.verdictExplicit && verdict && parsed.facts.length === 0 && parsed.redFlags.length === 0 && parsed.rawText && (
         <CollapsibleCard title="Details" defaultOpen={false}>
@@ -1183,6 +1211,13 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
             padding: "3px 11px", borderRadius: 999, fontSize: 12.5, fontWeight: 800 }}>
             {verdictEn}
           </span>
+          {/* Unverified items downgrade the verdict's certainty right at the pill —
+              "Recommended, pending verification" instead of a confident conclusion */}
+          {parsed.needUserConfirm.length > 0 && (
+            <span style={{ fontSize: 12, fontWeight: 700, color: "oklch(45% 0.1 80)" }}>
+              · pending verification
+            </span>
+          )}
         </div>
       ) : (
         <div style={{ lineHeight: 1.6 }}>{fallback ? <Markdown>{fallback}</Markdown> : "Investigation complete — see the Evidence Board."}</div>
@@ -1214,6 +1249,14 @@ export function ChatSummary({ parsed, prevVerdict, latencyMs, trials, jumpTarget
         <div style={{ color: "oklch(45% 0.12 25)", lineHeight: 1.6 }}>
           ⚠️ {flags.length} risk signal{flags.length > 1 ? "s" : ""}: {flags.slice(0, 2).map(f => f.text).join("; ")}
           {flags.length > 2 ? " …" : ""}
+        </div>
+      )}
+
+      {/* Items awaiting the user's own confirmation — the honest caveat row */}
+      {parsed.verdictExplicit && parsed.needUserConfirm.length > 0 && (
+        <div style={{ color: "oklch(45% 0.1 80)", lineHeight: 1.6 }}>
+          ⏳ {parsed.needUserConfirm.length} to confirm: {parsed.needUserConfirm.slice(0, 2).join("; ")}
+          {parsed.needUserConfirm.length > 2 ? " …" : ""}
         </div>
       )}
 

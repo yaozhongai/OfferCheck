@@ -81,6 +81,15 @@ function lightenCase(c: Case): Case {
 let _idSeq = 0;
 function nextId() { return ++_idSeq; }
 
+// Static stage-journey guidance shown after a stage completes its verdict —
+// product-driven (not model-generated), so the 4-stage funnel (role → fit →
+// recruiter → offer) is always offered regardless of what the model suggests.
+const STAGE_JOURNEY_HINTS: Partial<Record<Stage, string>> = {
+  stage2: "Add your resume to assess your personal fit",
+  stage3: "Got recruiter messages? Verify the sender",
+  stage4: "Received an offer? Run the deepest cross-verification",
+};
+
 export default function Home() {
   // Landing gate — a fresh visit starts on the entry screen. Entering pushes a
   // history entry so the browser Back button returns to the landing instead of
@@ -1008,6 +1017,32 @@ export default function Home() {
               </div>
             );
           })}
+
+          {/* Stage-journey guidance — static product path, not model output. Once this
+              stage has a verdict, offer the next unfinished stages of the funnel. */}
+          {initialDone && (() => {
+            const nexts = (Object.keys(STAGE_META) as Stage[])
+              .filter(s => s > stage && STAGE_JOURNEY_HINTS[s] && stageStates[s].initialRun.status !== "done")
+              .slice(0, 2);
+            if (nexts.length === 0) return null;
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 2 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "oklch(52% 0.02 50)",
+                  textTransform: "uppercase", letterSpacing: "0.04em" }}>Continue the journey</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  {nexts.map(s => (
+                    <button key={s} onClick={() => setStage(s)}
+                      style={{ textAlign: "left", background: "oklch(97.5% 0.012 145)",
+                        border: "1px solid oklch(87% 0.04 145)", borderRadius: 9, padding: "7px 11px",
+                        fontSize: 12.5, lineHeight: 1.45, color: "oklch(32% 0.06 145)",
+                        fontFamily: "var(--font-sans)", cursor: "pointer" }}>
+                      → <strong>{STAGE_META[s].num} {STAGE_META[s].en}</strong> · {STAGE_JOURNEY_HINTS[s]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           <div ref={chatBottomRef} />
         </div>

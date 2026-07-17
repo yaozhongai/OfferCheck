@@ -120,9 +120,11 @@ def _submit_verdict_tool_def() -> Dict[str, Any]:
                         "type": "string",
                         "description": (
                             "总体裁定，**只能取恰好一档**：靠谱 / 存疑 / 大概率有坑"
-                            "（选岗调研用 推荐/谨慎/不推荐；英文 Looks Legit / Suspicious / "
-                            "Likely a Scam）。**禁止混合两档**（如「存疑—大概率有坑」"
-                            "'Suspicious – Likely a Scam'）——拿不准时取更谨慎的中间档「存疑」。"
+                            "（选岗调研用 推荐/谨慎/不推荐；英文 offer 核验用 Looks Legit / "
+                            "Suspicious / Likely a Scam，英文选岗调研用 Recommended / "
+                            "Proceed with Caution / Not Recommended，不要自创其他英文档位词）。"
+                            "**禁止混合两档**（如「存疑—大概率有坑」'Suspicious – Likely a Scam'）"
+                            "——拿不准时取更谨慎的中间档「存疑/Proceed with Caution」。"
                         ),
                     },
                     "summary": {"type": "string", "description": "一句话结论与核心理由"},
@@ -156,12 +158,21 @@ def _submit_verdict_tool_def() -> Dict[str, Any]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": (
-                            "2-3 条建议用户继续深入的具体问题/行动（如'把 HR 邮箱发我，我核实域名是否仿冒'、"
-                            "'要不要我查这家公司最近的融资/裁员新闻'）。每条应能被一次新的取证式调查执行。"
+                            "2-3 条建议用户下一步的具体行动，按以下优先级生成（不适用的档位跳过）："
+                            "(1) 本轮存在证据冲突或 need_user_confirm 非空 → 第一条必须是核实该冲突/"
+                            "待确认项的具体取证行动，点明冲突双方渠道与状态；"
+                            "(2) 处于早期选岗/公司调研且用户未提供简历 → 建议添加简历与求职偏好，"
+                            "评估个人匹配度与差距；"
+                            "(3) 用户提到招聘方已联系 → 建议粘贴消息/邮件原文，核验发件人身份、域名与链接。"
+                            "每条 ≤120 字符、必须能被一次新的取证式调查执行；"
+                            "禁止『查口碑/员工评价/团队氛围』类无法客观取证的泛泛建议。"
                         ),
                     },
                 },
-                "required": ["verdict", "summary", "evidence"],
+                # summary_for_user / suggested_followups 曾为 optional，非 thinking 模型在
+                # 长 JSON（10+ 条 evidence）下会直接省略 → 聊天气泡无摘要、无下一步建议。
+                # 收为 required 强制生成；空值仍被 _finalize 容错（or ""/or []）。
+                "required": ["verdict", "summary", "evidence", "summary_for_user", "suggested_followups"],
             },
         },
     }

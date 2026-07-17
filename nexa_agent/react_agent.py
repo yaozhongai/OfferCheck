@@ -524,6 +524,10 @@ def apply_ais_confidence_downgrade(
     return "\n".join(lines), True
 
 
+# 条目级标签边界（lookahead 切分，标签保留在段首）。[Source]/[Confidence] 是行内标签，不参与。
+_ITEM_TAG_SPLIT_RE = re.compile(r"(?=\[(?:Fact|RedFlag|NeedUserConfirm)\])")
+
+
 def _as_str_list(v) -> list:
     """把 submit_verdict 的列表型字段规整为字符串列表。
 
@@ -536,6 +540,11 @@ def _as_str_list(v) -> list:
     `"evidence": "[\\"a\\", \\"b\\"]"`）：不解开的话整串 JSON 会以 `[` 开头、
     被 _render_verdict 的标签豁免原样放进答案，前端解析出 0 条 facts 并把
     生 JSON 展示给用户。这里先尝试解成真数组，失败再按单元素字符串处理。
+
+    还见过第三种（7/17 线上）：单个字符串里用条目级标签拼接多条——
+    `"[NeedUserConfirm] a … [NeedUserConfirm] b …"`。按条目级标签
+    （[Fact]/[RedFlag]/[NeedUserConfirm]）边界切分；[Source]/[Confidence]
+    是行内标签、不能作为切分点。
     """
     if not v:
         return []
@@ -551,7 +560,14 @@ def _as_str_list(v) -> list:
                 pass
     elif not isinstance(v, (list, tuple)):
         v = [v]
-    return [s for s in (str(x).strip() for x in v) if s]
+    items: list = []
+    for x in v:
+        s = str(x).strip()
+        if not s:
+            continue
+        parts = [p.strip() for p in _ITEM_TAG_SPLIT_RE.split(s) if p.strip()]
+        items.extend(parts if len(parts) > 1 else [s])
+    return items
 
 
 def _evidence_all_unsourced(items: list) -> bool:
@@ -608,12 +624,17 @@ def _build_verdict_struct(fields: dict) -> dict:
     """
     from nexa_agent.verifier import _classify_verdict_level
     raw = (fields.get("verdict") or "").strip()
+
+    def _strip_item_tag(s: str) -> str:
+        # 直传前端的展示条目：剥掉条目级前缀标签（[RedFlag] 等），行内 [Source] 保留
+        return re.sub(r"^\[(?:Fact|RedFlag|NeedUserConfirm)\]\s*", "", s).strip()
+
     return {
         "verdict": raw,                                          # 原始 label（中/英原文）
         "verdict_level": _classify_verdict_level(raw) if raw else "unknown",
         "summary": (fields.get("summary") or "").strip(),
-        "red_flags": _as_str_list(fields.get("red_flags")),
-        "need_user_confirm": _as_str_list(fields.get("need_user_confirm")),
+        "red_flags": [_strip_item_tag(s) for s in _as_str_list(fields.get("red_flags"))],
+        "need_user_confirm": [_strip_item_tag(s) for s in _as_str_list(fields.get("need_user_confirm"))],
     }
 
 

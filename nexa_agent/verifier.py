@@ -95,17 +95,18 @@ def _classify_verdict_level(verdict_text: str) -> str:
 def _match_verdict_keywords(text: str) -> str:
     """有序关键词匹配（scam → suspicious → reliable）"""
     t = text.lower()
-    # 大概率有坑 / scam
-    if any(k in text for k in ("大概率有坑", "有坑", "诈骗", "骗局", "不推荐")) or \
-       any(k in t for k in ("scam", "fraud", "likely scam", "high risk")):
+    # 大概率有坑 / scam（"not recommended"/"recommend skipping" 必须先于 reliable 组
+    # 的 "recommended" 测——子串包含）
+    if any(k in text for k in ("大概率有坑", "有坑", "诈骗", "骗局", "不推荐", "建议放弃")) or \
+       any(k in t for k in ("scam", "fraud", "likely scam", "high risk", "not recommended", "recommend skipping")):
         return "likely_scam"
     # 存疑 / suspicious / 谨慎
     if any(k in text for k in ("存疑", "谨慎", "可疑")) or \
        any(k in t for k in ("suspicious", "caution", "uncertain")):
         return "suspicious"
-    # 靠谱 / reliable / 推荐
-    if any(k in text for k in ("靠谱", "可靠", "推荐")) or \
-       any(k in t for k in ("reliable", "legit", "trustworthy", "safe")):
+    # 靠谱 / reliable / 推荐（英文 stage1 档位 "Recommended"/"Worth Applying" 同组）
+    if any(k in text for k in ("靠谱", "可靠", "推荐", "值得投递")) or \
+       any(k in t for k in ("reliable", "legit", "trustworthy", "safe", "recommended", "worth applying")):
         return "reliable"
     return "unknown"
 
