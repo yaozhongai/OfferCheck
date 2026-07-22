@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 import time
@@ -127,17 +128,73 @@ async def upload_file(
     description="对上传后的图片执行一次 VLM 识别，并缓存识别结果供后续会话复用。",
 )
 async def analyze_uploaded_file(request: ImageAnalysisRequest) -> ImageAnalysisResponse:
-    """上传后预识别图片内容。
+    """上传后预识别图片内容（云端 VLM，SHA-256 去重缓存）。
 
-    TODO(7/4 server 变薄): 旧 app/pipeline（未实现的 VLM 抽象）已删除。
-    图片识别改由 nexa_agent 核心工具 analyze_image / analyze_image_cloud 承担；
-    本路由待改为直接调用核心工具，并沿用 ImageAnalysisCache 做去重缓存。
-    在核心 wiring 完成前，此端点返回 501。
+    直接调用 nexa_agent 核心工具 analyze_image_cloud（GMI Gemini 3.1 优先，
+    Kimi 回落）；同 file_sha256 的重复请求直接命中 ImageAnalysisCache，
+    不再调 VLM。识别结果供后续会话/调查复用。
     """
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "图片预识别待接入 nexa_agent.tools.analyze_image（旧 app/pipeline 已移除，"
-            "见 7/4 server 变薄计划）"
-        ),
-    )
+    t0 = time.time()
+
+    # 1) 解析文件：优先 file_sha256 / file_id 查缓存表拿路径，否则用 file_path
+    file_path = request.file_path
+    file_sha256 = request.file_sha256 or ""
+    file_id = request.file_id or ""
+
+    with contextlib.closing(get_session()) as db:
+        if not file_sha256 and file_id:
+            row = db.query(ImageAnalysisCache).filter_by(file_id=file_id).first()
+            if row:
+                file_sha256 = row.file_sha256
+        if not file_sha256:
+            if not os.path.isfile(file_path):
+                raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+            file_sha256 = _sha256_file(file_path)
+
+        # 2) 缓存命中 → 直接返回
+        cached_row = db.query(ImageAnalysisCache).filter_by(
+            file_sha256=file_sha256).first()
+        if cached_row and cached_row.status == "success" and cached_row.vlm_text:
+            logger.info("files/analyze 缓存命中 sha256=%s", file_sha256[:12])
+            return _cache_to_response(cached_row, cached=True)
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+
+    # 3) 调引擎云端 VLM 工具（同步阻塞，放线程池避免卡 event loop）
+    import asyncio
+    from nexa_agent.tools import analyze_image_cloud
+
+    prompt = "提取图中所有文字信息，并简要描述图片主要内容。"
+    vlm_text = await asyncio.to_thread(
+        analyze_image_cloud, f"{file_path} | {prompt}")
+    latency_ms = int((time.time() - t0) * 1000)
+
+    is_error = vlm_text.startswith("[错误]")
+    status = "error" if is_error else "success"
+    model_name = "analyze_image_cloud"
+    if is_error:
+        logger.warning("files/analyze VLM 识别失败: %s", vlm_text[:200])
+
+    # 4) 写缓存（含失败结果——避免对同一坏文件反复打 VLM）
+    with contextlib.closing(get_session()) as db:
+        row = db.query(ImageAnalysisCache).filter_by(
+            file_sha256=file_sha256).first()
+        if row is None:
+            row = ImageAnalysisCache(
+                file_id=file_id or f"analyze_{uuid.uuid4().hex[:12]}",
+                file_sha256=file_sha256,
+                session_id=request.session_id,
+                image_path=file_path,
+            )
+            db.add(row)
+        row.filename = request.filename or row.filename
+        row.content_type = request.content_type or row.content_type
+        row.model_name = model_name
+        row.vlm_text = "" if is_error else vlm_text
+        row.status = status
+        row.latency_ms = latency_ms
+        row.error_message = vlm_text if is_error else None
+        db.commit()
+        db.refresh(row)
+        return _cache_to_response(row, cached=False)
