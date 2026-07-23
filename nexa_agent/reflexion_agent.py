@@ -44,7 +44,7 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger, start_run_log, stop_run_log
-from nexa_agent.react_agent import react_loop, LLM_API_KEY
+from nexa_agent.react_agent import react_loop, LLM_API_KEY, WEAK_EVIDENCE_THRESHOLD
 from nexa_agent.memory import ReflexionMemory, ReflectionEntry, _jaccard_similarity
 from nexa_agent.evaluator import create_evaluator
 from nexa_agent.verifier import VerifierAgent, should_trigger_verifier
@@ -339,6 +339,11 @@ class ReflexionReActAgent:
                         "steps_used": steps_used, "terminated_reason": terminated_reason,
                         "failure_mode": "api_error", "eval_reason": answer[:200],
                         "elapsed_seconds": round(trial_elapsed, 1), "reflection": None,
+                        "successful_retrievals": react_result.get("successful_retrievals", 0),
+                        "sufficiency_nudges": react_result.get("sufficiency_nudges", 0),
+                        "weak_evidence_nudges": react_result.get("weak_evidence_nudges", 0),
+                        "warn_tier_reached": react_result.get("warn_tier_reached", 0),
+                        "weak_evidence_forced_finalization": 0,
                     }],
                     reflections=[],
                     total_prompt_tokens=agg_prompt_tokens,
@@ -350,6 +355,9 @@ class ReflexionReActAgent:
                 "action_history": react_result.get("action_history", []),
                 "seen_urls": react_result.get("seen_urls", []),
                 "successful_retrievals": react_result.get("successful_retrievals", 0),
+                "sufficiency_nudges": react_result.get("sufficiency_nudges", 0),
+                "weak_evidence_nudges": react_result.get("weak_evidence_nudges", 0),
+                "warn_tier_reached": react_result.get("warn_tier_reached", 0),
                 "steps_used": steps_used,
                 "terminated_reason": terminated_reason,
             }
@@ -373,6 +381,18 @@ class ReflexionReActAgent:
                 "elapsed_seconds": round(trial_elapsed, 1),
                 "reflection": None,
                 "verdict": react_verdict,  # 结构化裁定（评审 3.2）；D5 全败回传最佳答案时一并取
+                # 收尾质量指标：保留到 trial trace，供 Eval Harness 汇总过度调查/
+                # 弱证据强行收尾率。后者仅在提示后仍以弱证据自然收尾时计 1。
+                "successful_retrievals": react_result.get("successful_retrievals", 0),
+                "sufficiency_nudges": react_result.get("sufficiency_nudges", 0),
+                "weak_evidence_nudges": react_result.get("weak_evidence_nudges", 0),
+                "warn_tier_reached": react_result.get("warn_tier_reached", 0),
+                "weak_evidence_forced_finalization": int(
+                    react_result.get("weak_evidence_nudges", 0) > 0
+                    and terminated_reason == "final_answer"
+                    and react_result.get("successful_retrievals", 0)
+                    < WEAK_EVIDENCE_THRESHOLD
+                ),
             }
             trial_details.append(trial_info)
             _emit("trial_evaluated", trial=trial, success=eval_result.success,

@@ -1324,7 +1324,8 @@ def react_loop(
 
                 # ── 跨步硬缓存：相同工具+参数直接返回上次结果，节省步数和 tokens ──
                 _cache_key = f"{tool_name}:{tool_args.strip().lower()}"
-                if _cache_key in _tool_cache:
+                _cache_hit = _cache_key in _tool_cache
+                if _cache_hit:
                     cached_obs = _tool_cache[_cache_key]
                     observation = f"[缓存] 该查询已在本轮调查中执行过，直接返回缓存结果：\n{cached_obs}"
                     logger.info("Step %d: 工具缓存命中 key=%s...", step_count, _cache_key[:60])
@@ -1336,7 +1337,9 @@ def react_loop(
                         _tool_cache[_cache_key] = observation
 
                 # 强制取证 gate：累计成功的检索类工具调用
-                if last_tool_success and tool_name in _RETRIEVAL_TOOLS:
+                # 缓存命中不是一条新证据，不能虚增「成功检索」并借重复查询跨过
+                # 充分性阈值。不同参数的真实检索仍分别计数。
+                if last_tool_success and not _cache_hit and tool_name in _RETRIEVAL_TOOLS:
                     successful_retrievals += 1
 
                 # 来源对账 registry：收集观察全文（截断前）+ 参数里出现的 URL
@@ -1546,6 +1549,9 @@ def react_loop(
             action_history=list(action_history),
             seen_urls=list(seen_urls),
             successful_retrievals=successful_retrievals,
+            sufficiency_nudges=_sufficiency_nudges,
+            weak_evidence_nudges=_weak_evidence_nudges,
+            warn_tier_reached=_warn_tier_reached,
         )
 
 

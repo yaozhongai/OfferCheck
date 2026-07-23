@@ -102,6 +102,13 @@ class EvalRecord:
     # 关键词召回评测（stage2）：期望关键词 + 实测召回率（0~1）
     expected_keywords: Optional[list[str]] = None
     keyword_recall: Optional[float] = None
+    # 收尾质量指标（按该 case 的全部 Reflexion trials 汇总）
+    termination_reasons: list[str] = field(default_factory=list)
+    successful_retrievals: int = 0
+    sufficiency_nudges: int = 0
+    weak_evidence_nudges: int = 0
+    weak_evidence_forced_finalizations: int = 0
+    warn_tier_reached: int = 0
 
 
 @dataclass
@@ -127,6 +134,7 @@ class EvalReport:
     verdict_metrics: dict = field(default_factory=dict)
     # 关键词召回指标（仅当套件含 expected_keywords 用例时填充）
     keyword_metrics: dict = field(default_factory=dict)
+    termination_metrics: dict = field(default_factory=dict)
     records: list[EvalRecord] = field(default_factory=list)
 
 
@@ -310,6 +318,37 @@ def compute_keyword_metrics(records: list["EvalRecord"]) -> dict:
         "pass_rate": round(passed / n * 100, 1),
         "pass_n": f"{passed}/{n}",
         "threshold": KEYWORD_RECALL_THRESHOLD,
+    }
+
+
+def compute_termination_metrics(records: list["EvalRecord"]) -> dict:
+    """汇总 ReAct 收尾质量。
+
+    分母使用 trial 而非 case：每个 Reflexion trial 都有一次独立的 ReAct 收尾。
+    兼容文档中的 ``max_steps_fallback`` 命名与当前运行时的 ``max_steps``。
+    """
+    total_trials = sum(
+        len(r.termination_reasons) if r.termination_reasons else max(r.trials_used, 0)
+        for r in records
+    )
+    max_steps_fallbacks = sum(
+        reason in ("max_steps", "max_steps_fallback")
+        for r in records
+        for reason in r.termination_reasons
+    )
+    weak_nudges = sum(r.weak_evidence_nudges for r in records)
+    forced = sum(r.weak_evidence_forced_finalizations for r in records)
+    return {
+        "total_trials": total_trials,
+        "max_steps_fallback_n": max_steps_fallbacks,
+        "overinvestigation_rate": round(
+            max_steps_fallbacks / total_trials * 100, 2
+        ) if total_trials else 0.0,
+        "sufficiency_nudges": sum(r.sufficiency_nudges for r in records),
+        "weak_evidence_nudges": weak_nudges,
+        "weak_evidence_forced_finalization_n": forced,
+        "early_finalization_rate": round(forced / weak_nudges * 100, 2) if weak_nudges else 0.0,
+        "max_warn_tier_reached": max((r.warn_tier_reached for r in records), default=0),
     }
 
 
@@ -526,6 +565,26 @@ class EvalHarness:
                 )
                 prompt_tokens = result.total_prompt_tokens       # 评审 3.6：成本指标
                 completion_tokens = result.total_completion_tokens
+                termination_reasons = [
+                    str(d.get("terminated_reason", "unknown")) for d in result.trial_details
+                ]
+                successful_retrievals = sum(
+                    int(d.get("successful_retrievals", 0) or 0) for d in result.trial_details
+                )
+                sufficiency_nudges = sum(
+                    int(d.get("sufficiency_nudges", 0) or 0) for d in result.trial_details
+                )
+                weak_evidence_nudges = sum(
+                    int(d.get("weak_evidence_nudges", 0) or 0) for d in result.trial_details
+                )
+                weak_evidence_forced_finalizations = sum(
+                    int(d.get("weak_evidence_forced_finalization", 0) or 0)
+                    for d in result.trial_details
+                )
+                warn_tier_reached = max(
+                    (int(d.get("warn_tier_reached", 0) or 0) for d in result.trial_details),
+                    default=0,
+                )
             except Exception as e:
                 elapsed = time.time() - start_time
                 prediction = ""
@@ -535,6 +594,12 @@ class EvalHarness:
                 step_count = 0
                 prompt_tokens = 0
                 completion_tokens = 0
+                termination_reasons = []
+                successful_retrievals = 0
+                sufficiency_nudges = 0
+                weak_evidence_nudges = 0
+                weak_evidence_forced_finalizations = 0
+                warn_tier_reached = 0
                 logger.error("Case %s 执行异常: %s", case.case_id[:8], e)
 
             # 评分模式三选一：裁定级 / 关键词召回 / GAIA 子串
@@ -569,6 +634,12 @@ class EvalHarness:
                 "keyword_recall": round(keyword_recall, 3) if keyword_recall is not None else None,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
+                "termination_reasons": termination_reasons,
+                "successful_retrievals": successful_retrievals,
+                "sufficiency_nudges": sufficiency_nudges,
+                "weak_evidence_nudges": weak_evidence_nudges,
+                "weak_evidence_forced_finalizations": weak_evidence_forced_finalizations,
+                "warn_tier_reached": warn_tier_reached,
             }
 
             failure_mode = extract_failure_mode(record_dict)
@@ -641,6 +712,7 @@ class EvalHarness:
             avg_total_tokens=round(statistics.mean(total_tok_list), 0) if total_tok_list else 0,
             verdict_metrics=compute_verdict_metrics(records),
             keyword_metrics=compute_keyword_metrics(records),
+            termination_metrics=compute_termination_metrics(records),
             config_snapshot={
                 "max_trials": self.max_trials,
                 "max_steps": self.max_steps,
@@ -702,6 +774,16 @@ class EvalHarness:
             print(f"\n  Keyword-Recall Metrics (n={km['total']}, stage2 定向清单):")
             print(f"    Avg recall:  {km['avg_recall']:.1f}%  — 平均命中预置差距关键词比例")
             print(f"    Pass rate:   {km['pass_rate']:.1f}%  ({km['pass_n']}) — recall ≥ {km['threshold']:.0%} 判达标")
+
+        tm = report.termination_metrics
+        if tm and tm["total_trials"]:
+            print(f"\n  Termination Metrics (trials={tm['total_trials']}):")
+            print(f"    Overinvestigation: {tm['overinvestigation_rate']:.1f}%  "
+                  f"({tm['max_steps_fallback_n']}) — max_steps fallback")
+            print(f"    Early finalization:{tm['early_finalization_rate']:>6.1f}%  "
+                  f"({tm['weak_evidence_forced_finalization_n']}/{tm['weak_evidence_nudges']}) "
+                  "— 弱证据提示后仍收尾")
+            print(f"    Sufficiency nudges: {tm['sufficiency_nudges']}")
 
         print(f"{'═' * 60}\n")
 
@@ -794,6 +876,32 @@ def analyze_results(path: str):
         print(f"\n  Keyword-Recall Metrics (n={km['total']}):")
         print(f"    Avg recall:  {km['avg_recall']:.1f}%")
         print(f"    Pass rate:   {km['pass_rate']:.1f}%  ({km['pass_n']}, recall ≥ {km['threshold']:.0%})")
+
+    termination_records = [
+        EvalRecord(
+            case_id=r.get("case_id", ""), question=r.get("question", ""),
+            expected_answer=r.get("expected_answer", ""),
+            prediction=r.get("prediction", ""), correct=r.get("correct", False),
+            trials_used=r.get("trials_used", 0), elapsed_seconds=r.get("elapsed_seconds", 0),
+            termination_reasons=r.get("termination_reasons", []),
+            successful_retrievals=r.get("successful_retrievals", 0),
+            sufficiency_nudges=r.get("sufficiency_nudges", 0),
+            weak_evidence_nudges=r.get("weak_evidence_nudges", 0),
+            weak_evidence_forced_finalizations=r.get(
+                "weak_evidence_forced_finalizations", 0
+            ),
+            warn_tier_reached=r.get("warn_tier_reached", 0),
+        )
+        for r in records
+    ]
+    tm = compute_termination_metrics(termination_records)
+    if tm["total_trials"]:
+        print(f"\n  Termination Metrics (trials={tm['total_trials']}):")
+        print(f"    Overinvestigation: {tm['overinvestigation_rate']:.1f}%  "
+              f"({tm['max_steps_fallback_n']})")
+        print(f"    Early finalization: {tm['early_finalization_rate']:.1f}%  "
+              f"({tm['weak_evidence_forced_finalization_n']}/{tm['weak_evidence_nudges']})")
+        print(f"    Sufficiency nudges: {tm['sufficiency_nudges']}")
 
     print(f"{'═' * 60}\n")
 
