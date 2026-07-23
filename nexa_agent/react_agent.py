@@ -87,6 +87,18 @@ MAX_EVIDENCE_GATE_NAGS = 2
 # 拒绝并要求重新提交的最大次数；超过则回退用 assistant 文本 / 原始参数收尾，绝不返回空裁定。
 MAX_SUBMIT_RETRY_NAGS = 2
 
+# ── 收尾机制（termination_mechanism_20260723 §四）──────────────────────────
+# 证据充分性自评：累计成功检索达到该阈值后、且尚未收尾时，注入一次「现有证据能否
+# 支撑裁定」的轻量自评提示（治「过度调查」+「提前收尾」）。与证据门「≥1 次」错开。
+SUFFICIENCY_RETRIEVAL_THRESHOLD = 2
+# 步数预警分档（治「被动截断」）：按剩余步数占比分档注入，每档一次，让模型逐步收敛。
+# 档位 = (剩余步数占比阈值, 文案强度)。最后一档 ≤1 步沿用原有强提示。
+WARN_TIERS = (0.5, 0.25)
+# 自然收尾弱证据软门（治「提前收尾」）：裁定型输出且 0 < 成功检索 < 该值时，
+# 先注入一次「证据单薄」提示再给收尾机会（软门，提示后坚持收尾则放行）。
+WEAK_EVIDENCE_THRESHOLD = 2
+MAX_WEAK_EVIDENCE_NAGS = 1
+
 # LLM 调用统一走 GATEWAY（评审 3.1b）；此处仅保留 trace 事件里引用的重试次数常量。
 from nexa_agent.util.llm_retry import DEFAULT_MAX_RETRIES as LLM_MAX_RETRIES
 from nexa_agent.util.injection import scan_injection
@@ -120,6 +132,10 @@ class ReactResult:
     successful_retrievals: int = 0
     evidence_registry: dict = field(default_factory=dict)
     verdict: Optional[dict] = None
+    # 收尾质量指标（termination_mechanism_20260723 §4.4）：供离线分析器/评测面板消费
+    sufficiency_nudges: int = 0      # 证据充分性自评提示次数
+    weak_evidence_nudges: int = 0    # 自然收尾弱证据软门提示次数
+    warn_tier_reached: int = 0       # 到达的步数预警档（0=未达, 1/2/3=档）
 
     # ── dict 只读兼容（迁移期）──
     def __getitem__(self, key: str) -> Any:
@@ -981,8 +997,15 @@ def react_loop(
     # evidence_strength：域名 → "strong"|"weak"，让真实抓取正文顶替搜索列表占位（P0 D1）。
     evidence_registry: dict[str, str] = {}
     evidence_strength: dict[str, str] = {}
-    # 步数预警：OfferCheck stage 下在步数耗尽前注入一次 submit_verdict 提示
+    # 步数预警：OfferCheck stage 下在步数耗尽前注入 submit_verdict 提示（分档）
     _near_limit_warned = False
+    _warned_tiers: set = set()          # 已注入的预警档（去重）
+    _warn_tier_reached = 0              # 本轮回合到达的最高档（指标）
+    # 证据充分性自评：每轮最多注入一次
+    _sufficiency_nudged = False
+    _sufficiency_nudges = 0             # 指标：自评提示次数
+    # 自然收尾弱证据软门：最多提示一次
+    _weak_evidence_nudges = 0           # 指标：弱证据提示次数
     # 跨步硬缓存：tool_name + normalized_args → observation（去重，防冗余调用）
     _tool_cache: dict[str, str] = {}
 
@@ -1053,6 +1076,10 @@ def react_loop(
             evidence_registry=dict(evidence_registry),
             # 结构化裁定（评审 3.2）：仅 submit_verdict 路径非空，additive 直传前端
             verdict=verdict,
+            # 收尾质量指标（termination_mechanism_20260723 §4.4）
+            sufficiency_nudges=_sufficiency_nudges,
+            weak_evidence_nudges=_weak_evidence_nudges,
+            warn_tier_reached=_warn_tier_reached,
         )
 
     def _gate_reprompt_msgs(content_or_note: str) -> None:
@@ -1070,18 +1097,40 @@ def react_loop(
     while step_count < max_steps:
         step_count += 1
 
-        # 步数预警：剩余 ≤2 步时注入一次 submit_verdict 提示（仅 OfferCheck stage）
-        if stage and not _near_limit_warned and (max_steps - step_count) <= 1:
-            _near_limit_warned = True
-            logger.info("Step %d: 步数预警注入（剩余%d步）", step_count, max_steps - step_count)
-            messages.append({
-                "role": "user",
-                "content": (
-                    "⚠️ [系统] 步数即将用尽。如已收集足够证据，"
-                    "请立即调用 submit_verdict 工具提交最终裁定，不要再调用其他工具。"
-                    "只有在关键信息完全缺失时才继续搜索。"
-                ),
-            })
+        # 步数预警分档（termination_mechanism_20260723 §4.2，仅 OfferCheck stage）：
+        # 让模型逐步收敛而非被 max_steps 被动截断。每档注入一次（_warned_tiers 去重）。
+        if stage and max_steps > 0:
+            remaining = max_steps - step_count
+            _tier = 0
+            if remaining <= 1:
+                _tier = 3
+            elif remaining / max_steps <= WARN_TIERS[1]:
+                _tier = 2
+            elif remaining / max_steps <= WARN_TIERS[0]:
+                _tier = 1
+            if _tier and _tier not in _warned_tiers:
+                _warned_tiers.add(_tier)
+                _warn_tier_reached = max(_warn_tier_reached, _tier)
+                logger.info("Step %d: 步数预警档%d 注入（剩余%d/%d步）",
+                            step_count, _tier, remaining, max_steps)
+                if _tier == 3:
+                    _warn_msg = (
+                        "⚠️ [系统] 步数即将用尽。如已收集足够证据，"
+                        "请立即调用 submit_verdict 工具提交最终裁定，不要再调用其他工具。"
+                        "只有在关键信息完全缺失时才继续搜索。"
+                    )
+                elif _tier == 2:
+                    _warn_msg = (
+                        "⚠️ [系统] 步数已消耗大半。请评估：现有证据是否足以支撑裁定？"
+                        "若足以，尽快调用 submit_verdict 收尾；若欠缺，只补最关键的一条证据。"
+                    )
+                else:
+                    _warn_msg = (
+                        "ℹ️ [系统] 步数已过半。请开始收敛调查方向：优先补齐关键证据，"
+                        "避免在已查过的来源上重复调用工具。"
+                    )
+                _emit("warn_tier", step=step_count, tier=_tier, remaining=remaining)
+                messages.append({"role": "user", "content": _warn_msg})
 
         # 动态升级：连续 N 步未发 tool_calls → 切备援模型
         if consecutive_no_toolcall >= DYNAMIC_UPGRADE_THRESHOLD:
@@ -1141,6 +1190,9 @@ def react_loop(
                 action_history=list(action_history),
                 seen_urls=list(seen_urls),
                 successful_retrievals=successful_retrievals,
+                sufficiency_nudges=_sufficiency_nudges,
+                weak_evidence_nudges=_weak_evidence_nudges,
+                warn_tier_reached=_warn_tier_reached,
             )
 
         msg = choice.message
@@ -1357,6 +1409,28 @@ def react_loop(
                     "content": f"[系统纠偏提示] {correction}",
                 })
 
+            # 证据充分性自评（termination_mechanism_20260723 §4.1，仅 OfferCheck stage）：
+            # 累计成功检索达阈值且尚未收尾时，注入一次「现有证据能否支撑裁定」的轻量
+            # 自评提示——治「过度调查」（该 submit 不收）与「提前收尾」（盲目继续）。
+            # 每轮最多一次（_sufficiency_nudged），阈值与证据门「≥1」错开。
+            if (stage and not _sufficiency_nudged
+                    and successful_retrievals >= SUFFICIENCY_RETRIEVAL_THRESHOLD):
+                _sufficiency_nudged = True
+                _sufficiency_nudges += 1
+                logger.info("Step %d: 证据充分性自评注入（successful_retrievals=%d）",
+                            step_count, successful_retrievals)
+                _emit("sufficiency_nudge", step=step_count,
+                      successful_retrievals=successful_retrievals)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[系统自评] 你已收集 {successful_retrievals} 条来源。请评估："
+                        "现有证据是否足以支撑裁定？\n"
+                        "- 若足以 → 立即调用 submit_verdict 提交，不要再做冗余调查。\n"
+                        "- 若不足 → 只补**缺失的那一条**关键证据，不要重复已查过的来源。"
+                    ),
+                })
+
             continue
 
         # ── 情况 2: 无 tool_calls → 原生终止约定：这段文本即最终答案 ──
@@ -1396,6 +1470,31 @@ def react_loop(
             )
             _emit("evidence_gate", step=step_count, reason="no_retrieval_before_verdict")
             _gate_reprompt_msgs(content)
+            last_tool_success = False
+            continue
+
+        # ── 自然收尾弱证据软门（termination_mechanism_20260723 §4.3，仅 OfferCheck stage）──
+        # 裁定型输出且 0 < 成功检索 < 阈值：不硬拦，先注入一次「证据单薄」提示给补强
+        # 机会（软门——提示后仍坚持收尾则放行，避免误杀合法的快速判定）。
+        if (stage and _weak_evidence_nudges < MAX_WEAK_EVIDENCE_NAGS
+                and _answer_requires_evidence(final_answer, stage)
+                and 0 < successful_retrievals < WEAK_EVIDENCE_THRESHOLD):
+            _weak_evidence_nudges += 1
+            logger.warning(
+                "Step %d: 自然收尾弱证据软门 — 仅 %d 次检索即给出裁定，提示补强 (nag %d/%d)",
+                step_count, successful_retrievals, _weak_evidence_nudges, MAX_WEAK_EVIDENCE_NAGS,
+            )
+            _emit("weak_evidence_nudge", step=step_count,
+                  successful_retrievals=successful_retrievals)
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"[系统提示] 你目前仅有 {successful_retrievals} 条检索来源，证据略显单薄。"
+                    "请确认：这些证据是否足以支撑你的裁定？\n"
+                    "- 若确认充分 → 重新给出你的最终裁定（维持收尾）。\n"
+                    "- 若把握不足 → 再补一条关键证据（如 whois 域名 / 公司实体核验）后再收尾。"
+                ),
+            })
             last_tool_success = False
             continue
 
