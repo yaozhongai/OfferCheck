@@ -28,7 +28,7 @@ except ImportError:
     pass
 
 from nexa_agent.logger import get_logger
-from nexa_agent.config import get_model_for_role, MODEL_CONFIG
+from nexa_agent.config import get_model_for_role, get_model_config_for_role
 from nexa_agent.util.json_extract import extract_json_block, repair_truncated_json
 from nexa_agent.llm_gateway import complete as llm_complete
 
@@ -237,11 +237,9 @@ class Evaluator:
 
         self.mode = mode
         self.model_name = model_name or get_model_for_role("evaluator_llm")
-        # base_url/api_key 必须与引擎 provider 一致（MODEL_CONFIG，唯一真源）。
-        # 旧默认写死 DEEPSEEK_BASE_URL（官方端点），而模型名是 GMI 风格 →
-        # 官方 API 不认 → 每次 400 静默回退启发式，LLM Judge 名存实亡。
-        self.base_url = base_url or MODEL_CONFIG["base_url"]
-        self.api_key = api_key or MODEL_CONFIG["api_key"]
+        route = get_model_config_for_role("evaluator_llm")
+        self.base_url = base_url or route["base_url"]
+        self.api_key = api_key or route["api_key"]
         logger.info("Evaluator 初始化 mode=%s model=%s base_url=%s",
                     mode, self.model_name, self.base_url)
 

@@ -59,10 +59,13 @@ async def lifespan(app: FastAPI):
 
     # 引擎模型链路（唯一真源 = nexa_agent/config.py）
     try:
-        from nexa_agent.config import LLM_PROVIDER, MODEL_TIER
-        logger.info("  引擎 LLM: provider=%s strong=%s fast=%s",
-                    LLM_PROVIDER, MODEL_TIER["strong"]["model"],
-                    MODEL_TIER["fast"]["model"])
+        from nexa_agent.config import MODEL_TIER
+        logger.info(
+            "  引擎 LLM: strong=%s/%s fast=%s/%s upgrade=%s/%s",
+            MODEL_TIER["strong"]["provider"], MODEL_TIER["strong"]["model"],
+            MODEL_TIER["fast"]["provider"], MODEL_TIER["fast"]["model"],
+            MODEL_TIER["upgrade"]["provider"], MODEL_TIER["upgrade"]["model"],
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("  引擎模型信息读取失败: %s", exc)
 
@@ -116,13 +119,18 @@ app.include_router(trace.router)
 @app.get("/api/v0/health", response_model=HealthResponse, tags=["system"])
 async def health():
     """系统健康检查 — 报告引擎模型链路（唯一真源 = nexa_agent/config.py）"""
-    from nexa_agent.config import LLM_PROVIDER, MODEL_TIER, MODEL_CONFIG
+    from nexa_agent.config import MODEL_TIER
+    text_tiers = ("strong", "fast", "upgrade")
     return HealthResponse(
         status="ok",
         version="0.1.0",
         vlm_available=False,
-        llm_available=bool(MODEL_CONFIG.get("api_key")),
-        llm_model=f"{LLM_PROVIDER}:{MODEL_TIER['strong']['model']}",
+        llm_available=all(bool(MODEL_TIER[t].get("api_key")) for t in text_tiers),
+        llm_model=(
+            f"deepseek:{MODEL_TIER['strong']['model']}/"
+            f"{MODEL_TIER['fast']['model']} | "
+            f"kimi:{MODEL_TIER['upgrade']['model']}"
+        ),
     )
 
 

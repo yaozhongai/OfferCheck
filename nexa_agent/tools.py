@@ -623,14 +623,14 @@ def analyze_image(param: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# 云端图片分析 — GMI Gemini 3.1（有 GMI key 时）/ Kimi K2.6（回落）
+# 云端图片分析 — Moonshot 官方 Kimi K2.6
 # --------------------------------------------------------------------------
 
 @register(
     name="analyze_image_cloud",
     description="使用云端视觉大模型分析图片，适合 OCR、复杂场景理解。"
-                "默认走 GMI Gemini 3.1（普通图用 flash-lite，空响应自动升级 pro），"
-                "无 GMI key 时回落 Kimi 多模态。支持本地路径和 URL（自动下载）。",
+                "固定走 Moonshot 官方 Kimi K2.6 多模态。"
+                "支持本地路径和 URL（自动下载）。",
     signature="analyze_image_cloud(image_path_or_url | prompt)",
     examples=[
         "analyze_image_cloud(./data/chart.png | 提取图中所有文字并解释含义)",
@@ -638,11 +638,7 @@ def analyze_image(param: str) -> str:
     ],
 )
 def analyze_image_cloud(param: str) -> str:
-    """云端图片分析 — GMI Gemini 3.1（默认）/ Kimi K2.6（回落）
-
-    按 config.VISION_CONFIG 选 provider：有 GMI_API_KEY 时走 GMI 的
-    gemini-3.1-flash-lite-preview（普通图）；返回空内容时自动升级
-    gemini-3.1-pro-preview（复杂/模糊图）重试一次。无 GMI key 回落 Kimi。
+    """云端图片分析 — Moonshot 官方 Kimi K2.6。
 
     Args:
         param: "图片路径 | 提示词" 格式的字符串
@@ -667,19 +663,11 @@ def analyze_image_cloud(param: str) -> str:
             f"Excel 请用 read_xlsx，PDF 请用 read_pdf。"
         )
 
-    # 选择 provider（GMI 优先，回落 Kimi）
+    # 去 GMI 化后视觉固定由 Moonshot 官方 Kimi 承担。
     provider = VISION_CONFIG["provider"]
     prov_cfg = VISION_CONFIG.get(provider, {})
     if not prov_cfg.get("api_key"):
-        # 首选 provider 无 key，尝试另一个
-        alt = "kimi" if provider == "gmi" else "gmi"
-        if VISION_CONFIG.get(alt, {}).get("api_key"):
-            provider, prov_cfg = alt, VISION_CONFIG[alt]
-        else:
-            return (
-                "[错误] analyze_image_cloud: 未配置视觉 provider 的 api_key"
-                "（需 GMI_API_KEY 或 MOONSHOT_API_KEY）"
-            )
+        return "[错误] analyze_image_cloud: 未配置 MOONSHOT_API_KEY"
 
     logger.info(
         "analyze_image_cloud 调用 provider=%s path=%s prompt=%s",
@@ -734,12 +722,6 @@ def analyze_image_cloud(param: str) -> str:
         t0 = time.time()
         model_used = prov_cfg["model"]
         content, tokens = _call(model_used)
-
-        # GMI 普通模型空响应 → 升级复杂模型重试一次（复杂/模糊图）
-        if provider == "gmi" and not content.strip() and prov_cfg.get("model_complex"):
-            model_used = prov_cfg["model_complex"]
-            logger.info("analyze_image_cloud: flash-lite 空响应，升级 %s 重试", model_used)
-            content, tokens = _call(model_used)
 
         elapsed_ms = (time.time() - t0) * 1000
         content = content or "(视觉模型返回空内容)"

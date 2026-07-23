@@ -10,7 +10,7 @@
   <a href="https://offercheck.up.railway.app/"><img src="https://img.shields.io/badge/demo-live-CF6A44?style=flat-square" alt="Live demo"></a>
   &nbsp;<img src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
   &nbsp;<img src="https://img.shields.io/badge/Next.js-15-000000?style=flat-square&logo=next.js&logoColor=white" alt="Next.js 15">
-  &nbsp;<img src="https://img.shields.io/badge/powered%20by-GMI%20Cloud-6E56CF?style=flat-square" alt="Powered by GMI Cloud">
+  &nbsp;<img src="https://img.shields.io/badge/providers-DeepSeek%20%2B%20Moonshot-6E56CF?style=flat-square" alt="DeepSeek and Moonshot official APIs">
 </p>
 
 > A skeptical research copilot for job seekers. Paste an offer, JD, company name, recruiter message, or screenshot — it independently investigates that **specific opportunity** on the live web and returns a verdict of **Looks Legit / Suspicious / Likely a Scam**, with a source-verified evidence chain and items for you to confirm yourself.
@@ -20,7 +20,7 @@
 - **Actively falsifies, not statically scores** — targets the highest-frequency scam pattern: impersonation of real companies (forged offers, lookalike domains, fake HR). Competitors return a static company credit score; OfferCheck investigates *this* opportunity, multi-source, and links every conclusion to sources it actually retrieved.
 - **No evidence, no verdict** — a four-layer grounding stack (grounding rules → mandatory-evidence gate → structured `submit_verdict` → source-attribution audit) blocks hallucinated verdicts by design.
 - **One engine, full journey** — role research → resume fit → recruiter-message check → offer verification run on a single autonomous investigation engine (per-stage prompts), with cross-stage memory carry-over and in-conversation capability routing.
-- **Powered by GMI Cloud** — DeepSeek-V4 Pro/Flash with layered thinking control, Kimi-K2 tool-call fallback, Gemini 3.1 vision OCR — routed per role by a model router.
+- **Dual official providers** — DeepSeek-V4 Pro/Flash for strong/fast reasoning and Moonshot Kimi K2.6 for tool-call upgrade and cloud vision, routed per tier.
 
 <p align="center">
   <img src="assets/architecture.png" alt="OfferCheck architecture: multimodal input → four stages (one engine, different stage prompts) → grounded ReAct + Reflexion investigation loop → three-state verdict with evidence" width="760">
@@ -74,7 +74,7 @@ Requirements: Python `3.10+` (conda env recommended), Node `18+` (frontend)
 
 ```bash
 git clone <repo-url> && cd <repo-dir>
-cp .env.example .env   # fill in GMI_API_KEY (or DEEPSEEK_API_KEY) and TAVILY_API_KEY
+cp .env.example .env   # fill in DEEPSEEK_API_KEY, MOONSHOT_API_KEY and TAVILY_API_KEY
 pip install -r requirements.txt
 ```
 
@@ -117,7 +117,7 @@ nexa_agent/                    reusable core engine (headless)
 ├── tools.py                  the 12 tools
 ├── memory.py                 Reflexion episodic memory (lesson extraction + Jaccard dedup)
 ├── eval_harness.py           systematic evaluation pipeline (verdict-level + keyword recall + regression compare)
-├── config.py                 tiered model routing + hyperparameters (incl. GMI/DeepSeek providers)
+├── config.py                 tiered dual-provider routing + hyperparameters
 ├── llm/  trace/  search/     LLM client · trace schema · pluggable search layer
 ├── prompts/                  system prompt + reflection + OfferCheck stage1~stage4
 └── eval_suites/              evaluation suites (GAIA regression-subset IDs)
@@ -149,15 +149,15 @@ web/                           Next.js frontend
 
 ### Model pipeline (LLM / VLM)
 
-Primary inference is served by the **GMI Cloud Inference Engine** (OpenAI-compatible), falling back to the official DeepSeek API when no GMI key is present. Thinking is **controlled per tier** via `extra_body={"enable_thinking": bool}` — the fast tier (Flash) disables thinking for speed, cost, and stable tool-calling, while the strong tier (Pro) keeps thinking for first-step planning and verdicts. Multi-turn tool-calling `reasoning_content` pass-back is handled by the engine — measured zero 400s, with the first step producing tool_calls instead of empty responses.
+Inference uses two official APIs. The gateway resolves provider, endpoint, key, model and thinking policy from the selected tier: strong/fast use DeepSeek, while upgrade/vision use Moonshot. There is no global provider switch, which prevents a Kimi model from being sent to the DeepSeek endpoint or vice versa.
 
 | Provider / model | Tier |
 |------|------|
-| GMI · `deepseek-ai/DeepSeek-V4-Pro` | strong (first-step planning, verdicts; thinking on) |
-| GMI · `deepseek-ai/DeepSeek-V4-Flash` | fast (subsequent steps, reflection, evaluation, lesson extraction; thinking off) |
-| GMI · `moonshotai/Kimi-K2-Instruct-0905` | upgrade (tool-call fallback, dynamic escalation) |
-| GMI · `google/gemini-3.1-flash-lite-preview` / `pro-preview` | vision (cloud image OCR, auto-upgrade on empty responses) |
-| Official DeepSeek API · Kimi multimodal · llama.cpp/MiniCPM-V | fallback without a GMI key / on-device |
+| DeepSeek official · `deepseek-v4-pro` | strong (first-step planning and verdicts; thinking on) |
+| DeepSeek official · `deepseek-v4-flash` | fast (subsequent steps, reflection, evaluation and lesson extraction; thinking off) |
+| Moonshot official · `kimi-k2.6` | upgrade (tool-call fallback; thinking off) |
+| Moonshot official · `kimi-k2.6` | vision (cloud image OCR and understanding) |
+| llama.cpp / MiniCPM-V | optional on-device vision |
 
 > **Dynamic escalation**: when the ReAct loop emits no `tool_calls` for 2 consecutive steps, it automatically switches from the fast tier to the upgrade tier (a tool-call reliability fallback under complex function schemas), then falls back once recovered. The single source of truth for model selection is `nexa_agent/config.py` (`MODEL_TIER` + `MODEL_ROUTING`), overridable via environment variables.
 

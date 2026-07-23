@@ -5,7 +5,7 @@ kwargs + thinking 注入 + retry + token 记账」。这带来批次 1 修过的
 （温度没传 / thinking 旧守卫 / retry 只护主循环 / 空响应只有 verifier 处理）。
 
 本模块把这套横切逻辑收敛到一处 `complete()`：
-  - role → 模型路由（复用 config.get_model_for_role），或显式 model
+  - role/model → tier → provider/base_url/api_key 的双 Provider 路由
   - 统一 thinking 注入（thinking_extra_body）、温度、stop
   - 统一瞬时错误重试（util.llm_retry.call_with_retry）+ 可选空响应重试
   - 统一 token 记账与日志（为 3.6 成本指标铺垫）
@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
-from nexa_agent.config import MODEL_CONFIG, thinking_extra_body, get_model_for_role
+from nexa_agent.config import MODEL_CONFIG, thinking_extra_body, resolve_model_config
 from nexa_agent.logger import get_logger
 from nexa_agent.util.llm_retry import call_with_retry, DEFAULT_MAX_RETRIES
 
@@ -51,20 +51,37 @@ class LLMResult:
 
 
 class LLMGateway:
-    """文本 LLM 调用网关。默认单例（GATEWAY），也可按需构造隔离实例。"""
+    """按模型 tier 分流到 DeepSeek/Moonshot 官方 API 的文本 LLM 网关。"""
 
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         self.api_key = api_key or MODEL_CONFIG["api_key"]
         self.base_url = base_url or MODEL_CONFIG["base_url"]
-        self._client = None  # 惰性构造
+        # _client 保留为测试/显式注入兼容；正常运行按 (provider, endpoint) 缓存客户端。
+        self._client = None
+        self._clients: dict[tuple[str, str], Any] = {}
 
-    def _get_client(self):
-        if self._client is None:
-            from openai import OpenAI
+    def _get_client(self, route: dict):
+        if self._client is not None:
+            return self._client
+        from openai import OpenAI
+        api_key = route["api_key"]
+        base_url = route["base_url"]
+        # 构造时显式传入的凭据用于隔离实例；默认单例始终使用 route 的官方凭据。
+        if self.api_key != MODEL_CONFIG["api_key"] or self.base_url != MODEL_CONFIG["base_url"]:
+            api_key, base_url = self.api_key, self.base_url
+        if not api_key:
+            env_name = "DEEPSEEK_API_KEY" if route["provider"] == "deepseek" else "MOONSHOT_API_KEY"
+            raise RuntimeError(
+                f"模型层 {route.get('tier') or 'custom'} 使用 {route['provider']}，"
+                f"但未配置 {env_name}"
+            )
+        cache_key = (route["provider"], base_url)
+        if cache_key not in self._clients:
             # 客户端层不做 SDK 自动重试（统一由 call_with_retry 管，避免双重重试）
-            self._client = OpenAI(api_key=self.api_key, base_url=self.base_url,
-                                  timeout=120.0, max_retries=0)
-        return self._client
+            self._clients[cache_key] = OpenAI(
+                api_key=api_key, base_url=base_url, timeout=120.0, max_retries=0
+            )
+        return self._clients[cache_key]
 
     def complete(
         self,
@@ -72,6 +89,7 @@ class LLMGateway:
         *,
         role: Optional[str] = None,
         model: Optional[str] = None,
+        provider: Optional[str] = None,
         tools: Optional[List[dict]] = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
@@ -85,13 +103,15 @@ class LLMGateway:
         """执行一次（非流式）LLM 调用并返回归一化结果。
 
         Args:
-            role/model: 二选一决定模型；role 经 get_model_for_role 解析，model 直接用。
+            role/model: 决定模型并自动解析对应 Provider；未知显式模型可传 provider。
             enable_thinking: 是否允许思考（经 thinking_extra_body 按 provider 落参）。
             timeout: 本次请求超时（秒）。
             max_retries: 瞬时错误重试次数（None=DEFAULT；stage_router 传 1 走快失败）。
             retry_on_empty: 成功但 content 为空时再试一次（GMI 大 prompt 偶发空返回）。
         """
-        actual_model = model or get_model_for_role(role or "react_main")
+        route = resolve_model_config(role=role or (None if model else "react_main"),
+                                     model=model, provider=provider)
+        actual_model = route["model"]
         kwargs: dict = {
             "model": actual_model,
             "messages": messages,
@@ -103,11 +123,15 @@ class LLMGateway:
             kwargs["tools"] = tools
         if stop:
             kwargs["stop"] = stop
-        _eb = thinking_extra_body(actual_model, enable_thinking)
+        # 文档第五节固定策略：strong 开思考，fast/upgrade 关思考。
+        effective_thinking = (
+            route["thinking"] == "enabled" if route.get("tier") else enable_thinking
+        )
+        _eb = thinking_extra_body(actual_model, effective_thinking, route["provider"])
         if _eb:
             kwargs["extra_body"] = _eb
 
-        client = self._get_client().with_options(timeout=timeout)
+        client = self._get_client(route).with_options(timeout=timeout)
         retries = DEFAULT_MAX_RETRIES if max_retries is None else max_retries
 
         t0 = time.time()
@@ -130,10 +154,11 @@ class LLMGateway:
         usage = response.usage
         pt = usage.prompt_tokens if usage else 0
         ct = usage.completion_tokens if usage else 0
-        logger.info("LLM 调用完成 model=%s elapsed=%.0fms tokens(in=%d out=%d) "
+        logger.info("LLM 调用完成 provider=%s model=%s elapsed=%.0fms tokens(in=%d out=%d) "
                     "tool_calls=%s thinking=%s",
-                    actual_model, elapsed_ms, pt, ct, bool(getattr(msg, "tool_calls", None)),
-                    "on" if enable_thinking else "off")
+                    route["provider"], actual_model, elapsed_ms, pt, ct,
+                    bool(getattr(msg, "tool_calls", None)),
+                    "on" if effective_thinking else "off")
 
         return LLMResult(
             content=msg.content or "",
@@ -150,6 +175,7 @@ class LLMGateway:
         *,
         role: Optional[str] = None,
         model: Optional[str] = None,
+        provider: Optional[str] = None,
         tools: Optional[List[dict]] = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
@@ -169,7 +195,9 @@ class LLMGateway:
         """
         import types as _types
 
-        actual_model = model or get_model_for_role(role or "react_main")
+        route = resolve_model_config(role=role or (None if model else "react_main"),
+                                     model=model, provider=provider)
+        actual_model = route["model"]
         kwargs: dict = {
             "model": actual_model,
             "messages": messages,
@@ -180,11 +208,14 @@ class LLMGateway:
         }
         if tools:
             kwargs["tools"] = tools
-        _eb = thinking_extra_body(actual_model, enable_thinking)
+        effective_thinking = (
+            route["thinking"] == "enabled" if route.get("tier") else enable_thinking
+        )
+        _eb = thinking_extra_body(actual_model, effective_thinking, route["provider"])
         if _eb:
             kwargs["extra_body"] = _eb
 
-        client = self._get_client().with_options(timeout=timeout)
+        client = self._get_client(route).with_options(timeout=timeout)
         retries = DEFAULT_MAX_RETRIES if max_retries is None else max_retries
         stream = call_with_retry(
             lambda: client.chat.completions.create(**kwargs),
@@ -248,15 +279,15 @@ class LLMGateway:
         msg = _types.SimpleNamespace(
             content=(acc_content or None), tool_calls=tool_calls_objs, reasoning_content=None,
         )
-        logger.info("LLM 流式调用完成 model=%s tokens(in=%d out=%d) tool_calls=%s",
-                    actual_model, pt, ct, bool(tool_calls_objs))
+        logger.info("LLM 流式调用完成 provider=%s model=%s tokens(in=%d out=%d) tool_calls=%s",
+                    route["provider"], actual_model, pt, ct, bool(tool_calls_objs))
         return LLMResult(
             content=acc_content or "", prompt_tokens=pt, completion_tokens=ct,
             finish_reason=finish_reason, reasoning_content=None, message=msg,
         )
 
 
-# 默认单例：全仓文本调用共享（provider 唯一真源 = MODEL_CONFIG）
+# 默认单例：全仓文本调用共享，内部按 tier 缓存两个官方 Provider 客户端。
 GATEWAY = LLMGateway()
 
 

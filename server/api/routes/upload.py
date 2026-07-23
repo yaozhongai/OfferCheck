@@ -130,7 +130,7 @@ async def upload_file(
 async def analyze_uploaded_file(request: ImageAnalysisRequest) -> ImageAnalysisResponse:
     """上传后预识别图片内容（云端 VLM，SHA-256 去重缓存）。
 
-    直接调用 nexa_agent 核心工具 analyze_image_cloud（GMI Gemini 3.1 优先，
+    直接调用 nexa_agent 核心工具 analyze_image_cloud（Moonshot 官方 Kimi K2.6，
     Kimi 回落）；同 file_sha256 的重复请求直接命中 ImageAnalysisCache，
     不再调 VLM。识别结果供后续会话/调查复用。
     """

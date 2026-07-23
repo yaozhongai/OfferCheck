@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from enum import Enum
 
+from nexa_agent.config import get_provider_for_model
 from nexa_agent.logger import get_logger
 
 logger = get_logger("trace_events")
@@ -67,7 +68,7 @@ KNOWN_EVENT_TYPES = frozenset(e.value for e in EngineEventType)
 # span。Phoenix 用 `openinference.span.kind`，通用 OTel 用 `gen_ai.*`——两者都给，
 # 摄取端各取所需。engine 私有维度落 `nexa.*` 命名空间，不污染标准键。
 
-_SYSTEM = "gmi"          # gen_ai.system：底层 LLM 提供方（唯一真源 = MODEL_CONFIG）
+_SYSTEM = "multi"        # 无模型信息的聚合事件；step_start 会按模型精确解析 provider
 _SERVICE = "nexa-agent"  # resource service.name
 
 # 事件 → OpenInference span kind
@@ -107,7 +108,7 @@ def to_otel_attributes(event: dict) -> dict:
 
     if et == EngineEventType.STEP_START.value:
         attrs["gen_ai.operation.name"] = "chat"
-        attrs["gen_ai.system"] = _SYSTEM
+        attrs["gen_ai.system"] = get_provider_for_model(event.get("model", ""))
         attrs["gen_ai.request.model"] = event.get("model")
         attrs["nexa.react.step"] = event.get("step")
         attrs["nexa.react.max_steps"] = event.get("max_steps")

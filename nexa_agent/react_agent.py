@@ -69,7 +69,7 @@ logger = get_logger("react_agent")
 # 配置
 # ==========================================================================
 
-# LLM API 配置（provider 由 config.LLM_PROVIDER 决定：GMI Cloud / DeepSeek 官方）
+# 兼容旧导入的默认凭据/模型：代表 strong（DeepSeek 官方）；实际每步由 Gateway 按 tier 分流。
 LLM_API_KEY = MODEL_CONFIG["api_key"]
 LLM_BASE_URL = MODEL_CONFIG["base_url"]
 LLM_MODEL = MODEL_CONFIG["model"]

@@ -20,103 +20,72 @@ except ImportError:
     pass
 
 # ==========================================================================
-# LLM Provider（gmi | deepseek）
+# 官方 API Provider（去 GMI 化，双 Provider）
 # ==========================================================================
-# 比赛期主推理经 GMI Cloud Inference Engine（OpenAI 兼容）承载；
-# LLM_PROVIDER 未显式指定时，优先 GMI（有 key 时），否则回落 DeepSeek 官方 API。
+# 固定职责：
+#   strong / fast → DeepSeek 官方
+#   upgrade / vision → Moonshot 官方
+# Provider 不再由一个全局 LLM_PROVIDER 环境变量切换，避免模型名被发送到错误 endpoint。
 
-_PROVIDER_PRESETS = {
-    "gmi": {
-        "base_url": os.environ.get("GMI_BASE_URL", "https://api.gmi-serving.com/v1"),
-        "api_key": os.environ.get("GMI_API_KEY", ""),
-        # DeepSeek-V4：用 extra_body={"enable_thinking": bool} 控制思考（实测 GMI 接受不报错）。
-        # Flash 可被关闭思考→快而省，用于成本敏感的多步执行（react_main/反思/评估）；
-        # Pro 会忽略该参数仍思考，用于首步规划/verifier。统一走 thinking_extra_body()。
-        "strong_model": "deepseek-ai/DeepSeek-V4-Pro",
-        "fast_model": "deepseek-ai/DeepSeek-V4-Flash",
-    },
+PROVIDER_CONFIG = {
     "deepseek": {
-        "base_url": os.environ.get(
-            "DEEPSEEK_BASE_URL",
-            os.environ.get("KIMI_BASE_URL", "https://api.deepseek.com"),
-        ),
-        "api_key": os.environ.get(
-            "DEEPSEEK_API_KEY",
-            os.environ.get("KIMI_API_KEY", ""),
-        ),
-        "strong_model": "deepseek-v4-pro",
-        "fast_model": "deepseek-v4-flash",
+        "base_url": os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
+    },
+    "kimi": {
+        "base_url": os.environ.get("KIMI_BASE_URL", "https://api.moonshot.cn/v1"),
+        "api_key": os.environ.get("MOONSHOT_API_KEY", ""),
     },
 }
 
-_default_provider = "gmi" if _PROVIDER_PRESETS["gmi"]["api_key"] else "deepseek"
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", _default_provider).lower()
-if LLM_PROVIDER not in _PROVIDER_PRESETS:
-    LLM_PROVIDER = "deepseek"
+def thinking_extra_body(
+    model: str,
+    enable_thinking: bool,
+    provider: str | None = None,
+) -> dict:
+    """生成官方 API 的 thinking 参数。
 
-_PRESET = _PROVIDER_PRESETS[LLM_PROVIDER]
-
-# DeepSeek 官方 API 用 {"thinking": {"type": ...}} 控制思考；GMI 收到该参数会 422。
-# 但 GMI 接受 vLLM 风格的 {"enable_thinking": bool}（实测）。两者由 thinking_extra_body 统一封装。
-SUPPORTS_THINKING_PARAM = LLM_PROVIDER == "deepseek"
-
-
-def thinking_extra_body(model: str, enable_thinking: bool) -> dict:
-    """按 provider 返回控制 thinking 的 extra_body（空 dict 表示不加任何参数）。
-
-    - gmi: {"enable_thinking": bool}
-        实测 GMI 接受该参数不报错；DeepSeek-V4-Flash 会真正关闭思考（reasoning_content 为空），
-        DeepSeek-V4-Pro 会忽略仍思考（无害，正好用于需要推理的首步/verifier）。
-    - deepseek 官方: {"thinking": {"type": "enabled"|"disabled"}}（仅 pro 支持开启）。
-    - 其他 provider: {}。
+    DeepSeek V4 与 Kimi K2.6 官方 OpenAI 兼容接口都使用
+    ``thinking.type=enabled|disabled``。provider 显式传入时优先；旧调用方未传时
+    根据模型归属推断。upgrade 的 disabled 策略由 MODEL_TIER/Gateway 强制执行。
     """
-    m = (model or "").lower()
-    if LLM_PROVIDER == "gmi":
-        return {"enable_thinking": bool(enable_thinking)}
-    if LLM_PROVIDER == "deepseek":
-        if enable_thinking and "pro" in m:
-            return {"thinking": {"type": "enabled"}}
-        if "deepseek" in m:
-            return {"thinking": {"type": "disabled"}}
+    resolved_provider = provider or get_provider_for_model(model)
+    if resolved_provider in ("deepseek", "kimi"):
+        return {"thinking": {"type": "enabled" if enable_thinking else "disabled"}}
     return {}
 
 # ==========================================================================
 # 模型配置
 # ==========================================================================
 
-MODEL_CONFIG = {
-    "provider": LLM_PROVIDER,
-    "model": os.environ.get("LLM_MODEL", _PRESET["strong_model"]),
-    "base_url": _PRESET["base_url"],
-    "api_key": _PRESET["api_key"],
-    # ReAct 主循环采样温度（0=最确定，利于可复现取证）。env 可覆盖。
-    # 注：此前该键从未被读取，主循环实际跑在 provider 默认温度上——现已在
-    # call_llm / call_llm_with_tools / stream_llm_with_tools 显式传入（评审 1.1）。
-    "react_temperature": float(os.environ.get("REACT_TEMPERATURE", "0.0")),
-    # （已删 reflection_temperature：从未被读；反思实际用 REFLEXION_CONFIG 的同名键）
-}
-
-# ==========================================================================
-# 模型分层（任务感知的动态模型选择）
-# ==========================================================================
-
 MODEL_TIER = {
     "strong": {
-        "model": os.environ.get("STRONG_MODEL", _PRESET["strong_model"]),
+        **PROVIDER_CONFIG["deepseek"],
+        "provider": "deepseek",
+        "model": os.environ.get("STRONG_MODEL", "deepseek-v4-pro"),
+        "thinking": "enabled",
         "description": "深度推理 — 首步规划、规则演化等需要强推理能力的任务",
     },
     "fast": {
-        "model": os.environ.get("FAST_MODEL", _PRESET["fast_model"]),
+        **PROVIDER_CONFIG["deepseek"],
+        "provider": "deepseek",
+        "model": os.environ.get("FAST_MODEL", "deepseek-v4-flash"),
+        "thinking": "disabled",
         "description": "快速执行 — 后续步骤、反思生成、评估判断等成本敏感任务",
     },
     "upgrade": {
-        # 备援模型：连续 N 步 LLM 未发 tool_calls 时动态切入。
-        # 必须是非思考模型——旧选 Qwen3.6-35B-A3B 实为思考模型，升级后照样
-        # 只输出 reasoning 不发 tool_calls（方向反了）。Kimi-K2-Instruct 是
-        # 非思考且工具调用强的备援（实测见失败分析文档）。
-        "model": os.environ.get("UPGRADE_MODEL", "moonshotai/Kimi-K2-Instruct-0905"),
+        **PROVIDER_CONFIG["kimi"],
+        "provider": "kimi",
+        "model": os.environ.get("UPGRADE_MODEL", "kimi-k2.6"),
+        "thinking": "disabled",
         "description": "备援 tool-call — 连续 N 步未发 tool_calls 时自动切入",
     },
+}
+
+# 兼容仍读取 MODEL_CONFIG 的调用方：它代表默认 strong 路由，而不是全局 Provider。
+MODEL_CONFIG = {
+    **MODEL_TIER["strong"],
+    "react_temperature": float(os.environ.get("REACT_TEMPERATURE", "0.0")),
 }
 
 MODEL_ROUTING = {
@@ -133,32 +102,13 @@ MODEL_ROUTING = {
 DYNAMIC_UPGRADE_THRESHOLD = 2
 
 # ==========================================================================
-# 视觉模型（云端图片理解 — analyze_image_cloud）
+# 视觉模型（Moonshot 官方 Kimi K2.6）
 # ==========================================================================
-# 文档「GMI模型选择」规定云端图片提取走 GMI 的 Gemini 3.1：
-#   普通图片 → gemini-3.1-flash-lite-preview；复杂/模糊 → gemini-3.1-pro-preview
-# 有 GMI key 时优先 GMI；否则回落 Kimi 多模态（旧路径），保证无 GMI 时仍可用。
-
-_VISION_GMI_KEY = os.environ.get("GMI_API_KEY", "")
-
 VISION_CONFIG = {
-    "provider": os.environ.get(
-        "VISION_PROVIDER", "gmi" if _VISION_GMI_KEY else "kimi"
-    ).lower(),
-    "gmi": {
-        "base_url": os.environ.get("GMI_BASE_URL", "https://api.gmi-serving.com/v1"),
-        "api_key": _VISION_GMI_KEY,
-        # 普通图片默认模型
-        "model": os.environ.get("VISION_MODEL", "google/gemini-3.1-flash-lite-preview"),
-        # 复杂/模糊图片升级模型（flash-lite 空响应时自动重试）
-        "model_complex": os.environ.get(
-            "VISION_MODEL_COMPLEX", "google/gemini-3.1-pro-preview"
-        ),
-    },
+    "provider": "kimi",
     "kimi": {
-        "base_url": os.environ.get("KIMI_BASE_URL", "https://api.moonshot.cn/v1"),
-        "api_key": os.environ.get("MOONSHOT_API_KEY", ""),
-        "model": "kimi-k2.6",
+        **PROVIDER_CONFIG["kimi"],
+        "model": os.environ.get("VISION_MODEL", "kimi-k2.6"),
     },
 }
 
@@ -183,7 +133,7 @@ REFLEXION_CONFIG = {
     "max_memory_size": int(os.environ.get("REFLEXION_MAX_MEMORY", "3")),
     "evaluator_mode": os.environ.get("REFLEXION_EVAL_MODE", "hybrid"),  # heuristic | llm | hybrid
     "persist_memory": os.environ.get("REFLEXION_PERSIST_MEMORY", "false").lower() == "true",
-    "reflection_model": os.environ.get("REFLEXION_MODEL", "deepseek-v4-pro"),
+    "reflection_model": os.environ.get("REFLEXION_MODEL", "deepseek-v4-flash"),
     "reflection_temperature": float(os.environ.get("REFLEXION_TEMPERATURE", "0.3")),
     "min_reflection_length": int(os.environ.get("REFLEXION_MIN_LENGTH", "20")),
     "max_reflection_length": int(os.environ.get("REFLEXION_MAX_LENGTH", "500")),
@@ -267,14 +217,69 @@ def get_model_for_role(role: str) -> str:
     return MODEL_TIER[tier]["model"]
 
 
+def get_model_config_for_role(role: str) -> dict:
+    """返回角色对应的完整路由（model/provider/base_url/api_key/thinking）。"""
+    tier = MODEL_ROUTING.get(role, "strong")
+    return {**MODEL_TIER[tier], "tier": tier}
+
+
+def get_provider_for_model(model: str) -> str:
+    """根据当前 tier 模型名反查 provider；未知显式模型安全回落 DeepSeek。"""
+    for cfg in MODEL_TIER.values():
+        if cfg["model"] == model:
+            return cfg["provider"]
+    return "kimi" if (model or "").lower().startswith("kimi-") else "deepseek"
+
+
+def resolve_model_config(
+    *,
+    role: str | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+) -> dict:
+    """解析一次调用应使用的完整模型路由。
+
+    role 优先确定 tier；显式 model 与现有 tier 同名时继承该 tier 的 provider。
+    对临时显式模型可同时传 provider，避免跨 Provider 猜测。
+    """
+    if role:
+        cfg = get_model_config_for_role(role)
+    else:
+        matched_tier = next(
+            (name for name, item in MODEL_TIER.items() if item["model"] == model),
+            None,
+        )
+        cfg = (
+            {**MODEL_TIER[matched_tier], "tier": matched_tier}
+            if matched_tier
+            else {**MODEL_TIER["strong"], "tier": None}
+        )
+
+    actual_provider = provider or (
+        cfg["provider"] if model is None or cfg.get("model") == model
+        else get_provider_for_model(model)
+    )
+    if actual_provider not in PROVIDER_CONFIG:
+        raise ValueError(f"不支持的模型 provider: {actual_provider}")
+    provider_cfg = PROVIDER_CONFIG[actual_provider]
+    return {
+        **cfg,
+        **provider_cfg,
+        "provider": actual_provider,
+        "model": model or cfg["model"],
+    }
+
+
 def get_config_summary() -> str:
     """生成配置摘要（用于调试和日志）"""
     lines = [
         "=" * 50,
         "Reflexion + ReAct 配置",
         "=" * 50,
-        f"LLM Provider: {LLM_PROVIDER} ({MODEL_CONFIG['base_url']})",
-        f"模型层级: strong={MODEL_TIER['strong']['model']}, fast={MODEL_TIER['fast']['model']}",
+        "LLM Providers: DeepSeek 官方 + Moonshot 官方",
+        f"模型层级: strong=deepseek/{MODEL_TIER['strong']['model']}, "
+        f"fast=deepseek/{MODEL_TIER['fast']['model']}, "
+        f"upgrade=kimi/{MODEL_TIER['upgrade']['model']}",
         f"路由策略: react_first→{MODEL_ROUTING['react_first']}, react_main→{MODEL_ROUTING['react_main']}",
         f"          reflection→{MODEL_ROUTING['reflection']}, eval→{MODEL_ROUTING['evaluator_llm']}",
         f"ReAct 最大步数: {REACT_CONFIG['max_steps']}",
