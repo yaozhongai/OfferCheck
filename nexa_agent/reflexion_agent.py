@@ -48,6 +48,7 @@ from nexa_agent.react_agent import react_loop, LLM_API_KEY, WEAK_EVIDENCE_THRESH
 from nexa_agent.memory import ReflexionMemory, ReflectionEntry, _jaccard_similarity
 from nexa_agent.evaluator import create_evaluator
 from nexa_agent.verifier import VerifierAgent, should_trigger_verifier
+from nexa_agent.harness_config import FULL_HARNESS, HarnessRuntimeConfig
 from nexa_agent.config import (
     REFLEXION_CONFIG, REACT_CONFIG, PATH_CONFIG, get_config_summary,
 )
@@ -145,6 +146,9 @@ class ReflexionReActAgent:
         evaluator_mode: str = "hybrid",
         persist_memory: bool = False,
         max_steps: int = 16,
+        runtime_config: HarnessRuntimeConfig = FULL_HARNESS,
+        excluded_tools: frozenset[str] = frozenset(),
+        enable_curation: bool = True,
     ):
         """初始化 Reflexion 控制器
 
@@ -154,9 +158,13 @@ class ReflexionReActAgent:
             evaluator_mode: 评估模式 — "heuristic" | "llm" | "hybrid"
             persist_memory: 是否持久化记忆到文件
             max_steps: 每次 ReAct 的最大步数
+            runtime_config: Harness 运行时组件开关；生产默认 Full。
         """
         self.max_trials = max_trials
         self.max_steps = max_steps
+        self.runtime_config = runtime_config
+        self.excluded_tools = excluded_tools
+        self.enable_curation = enable_curation
 
         # 记忆管理器
         persist_path = Path(PATH_CONFIG["reflections_file"]) if persist_memory else None
@@ -195,6 +203,8 @@ class ReflexionReActAgent:
         on_event: Optional[Callable[[dict], None]] = None,
         answer_mode: bool = False,
         output_lang: Optional[str] = None,
+        task_profile: Optional[str] = None,
+        task_metadata: Optional[dict] = None,
     ) -> ReflexionResult:
         """执行带反思的完整任务流程
 
@@ -204,8 +214,11 @@ class ReflexionReActAgent:
             verbose: 是否打印详细过程
             stage: 可选的 OfferCheck 阶段标识（如 "offercheck_stage1"）。
                    透传给 react_loop，为该阶段加载任务定义 prompt。
+            task_profile: 显式 Task Profile；无 stage 时默认 generic_research。
             on_event: 可选的结构化事件回调，透传给 react_loop 并在 Trial
                       边界发射 trial_start/trial_end，供 server 转 SSE 流。
+            task_metadata: 可选的评测任务元数据（fault_variant/forbidden_actions），
+                      透传 react_loop 用于结构化安全事件检测（protocol-r2 §E）。
 
         Returns:
             ReflexionResult
@@ -296,6 +309,11 @@ class ReflexionReActAgent:
                 on_event=on_event,
                 answer_mode=answer_mode,
                 output_lang=output_lang,
+                task_profile=task_profile,
+                runtime_config=self.runtime_config,
+                excluded_tools=self.excluded_tools,
+                enable_curation=self.enable_curation,
+                task_metadata=task_metadata,
             )
 
             # 从轨迹中提取本轮访问过的 URL，累积到 visited_urls
@@ -354,12 +372,14 @@ class ReflexionReActAgent:
             action_log = {
                 "action_history": react_result.get("action_history", []),
                 "seen_urls": react_result.get("seen_urls", []),
+                "action_history": react_result.get("action_history", []),
                 "successful_retrievals": react_result.get("successful_retrievals", 0),
                 "sufficiency_nudges": react_result.get("sufficiency_nudges", 0),
                 "weak_evidence_nudges": react_result.get("weak_evidence_nudges", 0),
                 "warn_tier_reached": react_result.get("warn_tier_reached", 0),
                 "steps_used": steps_used,
                 "terminated_reason": terminated_reason,
+                "evidence_registry": react_result.get("evidence_registry", {}),
             }
             eval_result = self.evaluator.evaluate(
                 task=task,
@@ -384,9 +404,18 @@ class ReflexionReActAgent:
                 # 收尾质量指标：保留到 trial trace，供 Eval Harness 汇总过度调查/
                 # 弱证据强行收尾率。后者仅在提示后仍以弱证据自然收尾时计 1。
                 "successful_retrievals": react_result.get("successful_retrievals", 0),
+                "seen_urls": react_result.get("seen_urls", []),
+                "source_attribution": react_result.get("source_attribution"),
+                "evidence_registry": react_result.get("evidence_registry", {}),
+                "evidence_records": react_result.get("evidence_records", []),
+                "claim_bindings": react_result.get("claim_bindings", []),
                 "sufficiency_nudges": react_result.get("sufficiency_nudges", 0),
                 "weak_evidence_nudges": react_result.get("weak_evidence_nudges", 0),
                 "warn_tier_reached": react_result.get("warn_tier_reached", 0),
+                # 结构化安全事件 + 行动日志（protocol-r2 §E）：grader 据
+                # safety_events 判定 no_unsafe_event；action_history 供离线审计。
+                "safety_events": react_result.get("safety_events", []),
+                "action_history": react_result.get("action_history", []),
                 "weak_evidence_forced_finalization": int(
                     react_result.get("weak_evidence_nudges", 0) > 0
                     and terminated_reason == "final_answer"
@@ -401,7 +430,10 @@ class ReflexionReActAgent:
             if eval_result.success:
                 # ── 方案 B: Verifier 节点 — 行为通过后进行事实核查 ──
                 verdict = None
-                if should_trigger_verifier(task, trial_details, trial):
+                if (
+                    self.runtime_config.verifier
+                    and should_trigger_verifier(task, trial_details, trial)
+                ):
                     if verbose:
                         print(f"\n🔍 Verifier 介入: 事实核查中...")
                     _emit("verifier_start", trial=trial)

@@ -20,7 +20,10 @@ reasoning_content 语义）。
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+import json
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, List, Optional
 
 from nexa_agent.config import MODEL_CONFIG, thinking_extra_body, resolve_model_config
@@ -28,6 +31,188 @@ from nexa_agent.logger import get_logger
 from nexa_agent.util.llm_retry import call_with_retry, DEFAULT_MAX_RETRIES
 
 logger = get_logger("llm_gateway")
+
+
+@dataclass
+class UsageEntry:
+    role: str
+    provider: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    elapsed_ms: float
+    streamed: bool = False
+
+
+@dataclass
+class UsageLedger:
+    """All successful text-LLM calls made inside one external evaluation trial."""
+
+    entries: list[UsageEntry] = field(default_factory=list)
+    max_tokens: Optional[int] = None
+    max_wall_seconds: Optional[float] = None
+    max_llm_attempts: Optional[int] = None
+    max_tool_calls: Optional[int] = None
+    started_monotonic: float = field(default_factory=time.monotonic)
+    llm_attempts: int = 0
+    tool_calls: int = 0
+    budget_exceeded: Optional[str] = None
+
+    def add(self, entry: UsageEntry) -> None:
+        self.entries.append(entry)
+
+    def _deny(self, reason: str) -> None:
+        self.budget_exceeded = reason
+        raise BudgetExceededError(reason)
+
+    def check_wall(self) -> None:
+        if (
+            self.max_wall_seconds is not None
+            and time.monotonic() - self.started_monotonic >= self.max_wall_seconds
+        ):
+            self._deny("max_wall_seconds_per_trial")
+
+    def admit_llm(self, messages: List[dict], requested_max_tokens: int) -> int:
+        """Admit one network attempt and conservatively cap its completion tokens."""
+
+        self.check_wall()
+        if (
+            self.max_llm_attempts is not None
+            and self.llm_attempts >= self.max_llm_attempts
+        ):
+            self._deny("max_llm_attempts_per_trial")
+        self.llm_attempts += 1
+        if self.max_tokens is None:
+            return requested_max_tokens
+
+        remaining = self.max_tokens - self.total_tokens
+        # UTF-8 byte length is a conservative upper bound for current tokenizer
+        # families and prevents admitting a call whose prompt plus output ceiling
+        # cannot fit in the shared trial budget.
+        prompt_upper_bound = len(
+            json.dumps(messages, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ) + 64
+        allowed_completion = remaining - prompt_upper_bound
+        if allowed_completion < 1:
+            self._deny("max_tokens_per_trial")
+        return min(requested_max_tokens, allowed_completion)
+
+    def admit_tool(self) -> None:
+        self.check_wall()
+        if (
+            self.max_tool_calls is not None
+            and self.tool_calls >= self.max_tool_calls
+        ):
+            self._deny("max_tool_calls_per_trial")
+        self.tool_calls += 1
+
+    @property
+    def prompt_tokens(self) -> int:
+        return sum(entry.prompt_tokens for entry in self.entries)
+
+    @property
+    def completion_tokens(self) -> int:
+        return sum(entry.completion_tokens for entry in self.entries)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    def snapshot(self) -> dict[str, Any]:
+        by_role: dict[str, dict[str, int]] = {}
+        for entry in self.entries:
+            aggregate = by_role.setdefault(
+                entry.role,
+                {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0},
+            )
+            aggregate["calls"] += 1
+            aggregate["prompt_tokens"] += entry.prompt_tokens
+            aggregate["completion_tokens"] += entry.completion_tokens
+        return {
+            "calls": len(self.entries),
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "llm_attempts": self.llm_attempts,
+            "tool_calls": self.tool_calls,
+            "budget_exceeded": self.budget_exceeded,
+            "by_role": by_role,
+            "entries": [asdict(entry) for entry in self.entries],
+        }
+
+
+_USAGE_LEDGER: ContextVar[Optional[UsageLedger]] = ContextVar(
+    "nexa_usage_ledger", default=None
+)
+
+
+class BudgetExceededError(RuntimeError):
+    """Raised before an evaluation action would exceed its shared hard budget."""
+
+
+@contextmanager
+def usage_scope(
+    *,
+    max_tokens: Optional[int] = None,
+    max_wall_seconds: Optional[float] = None,
+    max_llm_attempts: Optional[int] = None,
+    max_tool_calls: Optional[int] = None,
+):
+    """Collect gateway usage without leaking accounting across independent trials."""
+
+    ledger = UsageLedger(
+        max_tokens=max_tokens,
+        max_wall_seconds=max_wall_seconds,
+        max_llm_attempts=max_llm_attempts,
+        max_tool_calls=max_tool_calls,
+    )
+    token = _USAGE_LEDGER.set(ledger)
+    try:
+        yield ledger
+    finally:
+        _USAGE_LEDGER.reset(token)
+
+
+def _record_usage(
+    *,
+    role: Optional[str],
+    provider: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    elapsed_ms: float,
+    streamed: bool = False,
+) -> None:
+    ledger = _USAGE_LEDGER.get()
+    if ledger is not None:
+        ledger.add(
+            UsageEntry(
+                role=role or "unspecified",
+                provider=provider,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                elapsed_ms=round(elapsed_ms, 3),
+                streamed=streamed,
+            )
+        )
+
+
+def record_tool_call() -> None:
+    """Count one real tool execution against the active evaluation budget."""
+
+    ledger = _USAGE_LEDGER.get()
+    if ledger is not None:
+        ledger.admit_tool()
+
+
+def _admit_llm_attempt(messages: List[dict], requested_max_tokens: int) -> int:
+    ledger = _USAGE_LEDGER.get()
+    if ledger is None:
+        return requested_max_tokens
+    return ledger.admit_llm(messages, requested_max_tokens)
 
 
 @dataclass
@@ -88,6 +273,7 @@ class LLMGateway:
         messages: List[dict],
         *,
         role: Optional[str] = None,
+        usage_role: Optional[str] = None,
         model: Optional[str] = None,
         provider: Optional[str] = None,
         tools: Optional[List[dict]] = None,
@@ -138,9 +324,23 @@ class LLMGateway:
         attempts = 2 if retry_on_empty else 1
         response = None
         for i in range(attempts):
+            attempt_started = time.time()
+            def _request():
+                kwargs["max_tokens"] = _admit_llm_attempt(messages, max_tokens)
+                return client.chat.completions.create(**kwargs)
+
             response = call_with_retry(
-                lambda: client.chat.completions.create(**kwargs),
+                _request,
                 max_retries=retries, on_retry=on_retry,
+            )
+            attempt_usage = response.usage
+            _record_usage(
+                role=usage_role or role,
+                provider=route["provider"],
+                model=actual_model,
+                prompt_tokens=attempt_usage.prompt_tokens if attempt_usage else 0,
+                completion_tokens=attempt_usage.completion_tokens if attempt_usage else 0,
+                elapsed_ms=(time.time() - attempt_started) * 1000,
             )
             content = response.choices[0].message.content or ""
             if content.strip() or i == attempts - 1:
@@ -174,6 +374,7 @@ class LLMGateway:
         messages: List[dict],
         *,
         role: Optional[str] = None,
+        usage_role: Optional[str] = None,
         model: Optional[str] = None,
         provider: Optional[str] = None,
         tools: Optional[List[dict]] = None,
@@ -217,8 +418,13 @@ class LLMGateway:
 
         client = self._get_client(route).with_options(timeout=timeout)
         retries = DEFAULT_MAX_RETRIES if max_retries is None else max_retries
+        stream_started = time.time()
+        def _request_stream():
+            kwargs["max_tokens"] = _admit_llm_attempt(messages, max_tokens)
+            return client.chat.completions.create(**kwargs)
+
         stream = call_with_retry(
-            lambda: client.chat.completions.create(**kwargs),
+            _request_stream,
             max_retries=retries, on_retry=on_retry,
         )
 
@@ -281,6 +487,15 @@ class LLMGateway:
         )
         logger.info("LLM 流式调用完成 provider=%s model=%s tokens(in=%d out=%d) tool_calls=%s",
                     route["provider"], actual_model, pt, ct, bool(tool_calls_objs))
+        _record_usage(
+            role=usage_role or role,
+            provider=route["provider"],
+            model=actual_model,
+            prompt_tokens=pt,
+            completion_tokens=ct,
+            elapsed_ms=(time.time() - stream_started) * 1000,
+            streamed=True,
+        )
         return LLMResult(
             content=acc_content or "", prompt_tokens=pt, completion_tokens=ct,
             finish_reason=finish_reason, reasoning_content=None, message=msg,

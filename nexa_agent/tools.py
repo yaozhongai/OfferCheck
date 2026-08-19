@@ -65,10 +65,19 @@ def register(name: str, description: str, signature: str, examples: List[str]):
     return decorator
 
 
-def get_openai_tool_definitions() -> List[Dict[str, Any]]:
-    """生成 OpenAI function calling 格式的工具定义列表"""
+def get_openai_tool_definitions(
+    finalizer_tool: str = "submit_verdict",
+    excluded_tools: frozenset[str] = frozenset(),
+) -> List[Dict[str, Any]]:
+    """生成 OpenAI function calling 格式的工具定义列表。
+
+    ``finalizer_tool`` 由 Task Profile 决定，防止通用任务暴露
+    OfferCheck 专用 ``submit_verdict`` schema。
+    """
     definitions = []
     for name, meta in TOOL_META.items():
+        if name in excluded_tools:
+            continue
         desc = meta["description"]
         if meta.get("examples"):
             desc += "\n示例: " + "; ".join(meta["examples"])
@@ -93,9 +102,56 @@ def get_openai_tool_definitions() -> List[Dict[str, Any]]:
         }
         definitions.append(tool_def)
 
-    # 显式终止工具：结构化提交裁定并结束调查（由 react_loop 特殊处理，不进 TOOLS 执行）
-    definitions.append(_submit_verdict_tool_def())
+    # 显式终止工具由 react_loop 特殊处理，不进入 TOOLS 执行。
+    if finalizer_tool == "submit_verdict":
+        definitions.append(_submit_verdict_tool_def())
+    elif finalizer_tool == "submit_answer":
+        definitions.append(_submit_answer_tool_def())
+    elif finalizer_tool:
+        raise ValueError(f"unsupported finalizer tool: {finalizer_tool}")
     return definitions
+
+
+def _submit_answer_tool_def() -> Dict[str, Any]:
+    """Generic research completion schema."""
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "submit_answer",
+            "description": (
+                "Submit the final answer for a generic research or tool-use task. "
+                "Citations must be exact URLs or tool references observed in this run."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answer": {
+                        "type": "string",
+                        "description": "Direct, self-contained answer to the user task.",
+                    },
+                    "claims": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Atomic factual claims that the answer relies on.",
+                    },
+                    "citations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Exact URLs or tool references actually observed in this run."
+                        ),
+                    },
+                    "uncertainty": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Unresolved conflicts, missing evidence, or limitations.",
+                    },
+                },
+                "required": ["answer", "claims", "citations", "uncertainty"],
+            },
+        },
+    }
 
 
 def _submit_verdict_tool_def() -> Dict[str, Any]:
@@ -229,12 +285,12 @@ def _is_login_wall(url: str) -> bool:
 
 @register(
     name="web_search",
-    description="搜索互联网，返回前若干条实时结果（含内容摘要）；内部经可插拔 provider 层多源降级（Tavily→Exa→DuckDuckGo）",
+    description="搜索互联网，返回前若干条实时结果（含内容摘要）；内部按当前运行配置在可用搜索 provider 间有序降级",
     signature="web_search(query)",
     examples=["web_search(2025年诺贝尔奖得主)"],
 )
 def web_search(query: str) -> str:
-    """Web 搜索 — 经可插拔 provider 层（Tavily→Exa→DDG 有序降级）。
+    """Web 搜索 — 经当前配置的可插拔 provider 层有序降级。
 
     provider 顺序、Exa key、熔断阈值等由 config.SEARCH_CONFIG 控制。
 
@@ -252,6 +308,7 @@ def web_search(query: str) -> str:
 
     from nexa_agent.config import SEARCH_CONFIG
     from nexa_agent.search import enrich_results, get_default_router
+    from nexa_agent.search.relevance import filter_relevant_results
 
     try:
         router = get_default_router()
@@ -260,8 +317,21 @@ def web_search(query: str) -> str:
         logger.error("web_search 失败: %s", exc, exc_info=True)
         return f"[错误] web_search 执行失败: {exc}"
 
+    raw_result_count = len(results)
+    results = filter_relevant_results(query, results)
+    if raw_result_count and not results:
+        logger.info(
+            "web_search relevance gate dropped all results query=%s raw=%d",
+            query,
+            raw_result_count,
+        )
+
     if not results:
-        return f"未找到与 '{query}' 相关的结果（所有搜索 provider 均无结果或不可用）。"
+        configured = "→".join(SEARCH_CONFIG["provider_order"])
+        return (
+            f"未找到与 '{query}' 相关的结果"
+            f"（本轮配置的 provider {configured} 均无结果或不可用）。"
+        )
 
     # URL 去重：相同 URL 只保留第一条（多 provider 降级时可能出现重复）
     _seen_result_urls: set[str] = set()

@@ -123,3 +123,8 @@ tmp/
 *.mov
 *.zip
 OfferCheck_WAIC_*/
+
+# 本地基准虚拟环境 / 临时探针（不入公开仓库）
+.venv-bench/
+kimi_k3_test.py
+assets/lark_auth_qrcode_*.png

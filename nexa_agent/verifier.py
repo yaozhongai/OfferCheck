@@ -458,7 +458,7 @@ class VerifierAgent:
                 {"role": "user", "content": prompt},
             ],
             model=self.model, max_tokens=2048, temperature=0.0,
-            timeout=30.0, retry_on_empty=True,
+            timeout=30.0, retry_on_empty=True, usage_role="verifier",
         )
         return result.content
 

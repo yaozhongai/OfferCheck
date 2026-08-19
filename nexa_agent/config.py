@@ -7,6 +7,8 @@ Reflexion + ReAct 统一配置管理
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 # 加载 .env（config 可能被独立 import，不依赖上游先加载）
@@ -97,6 +99,27 @@ MODEL_ROUTING = {
     "tool_call_upgrade": "upgrade",  # 备援 — 动态升级触发时使用
     # （已删 evolver 路由：无对应实现，get_model_for_role("evolver") 从未被调用）
 }
+
+_MODEL_TIER_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "nexa_model_tier_override", default=None
+)
+
+
+@contextmanager
+def model_tier_scope(tier: str | None):
+    """Temporarily force every text-LLM role onto one model tier."""
+
+    if tier is not None and tier not in MODEL_TIER:
+        raise ValueError(f"unknown model tier override: {tier}")
+    token = _MODEL_TIER_OVERRIDE.set(tier)
+    try:
+        yield
+    finally:
+        _MODEL_TIER_OVERRIDE.reset(token)
+
+
+def _tier_for_role(role: str) -> str:
+    return _MODEL_TIER_OVERRIDE.get() or MODEL_ROUTING.get(role, "strong")
 
 # 动态升级阈值：连续 N 步 LLM 未发 tool_calls（且无 Final Answer）后自动切 upgrade 层
 DYNAMIC_UPGRADE_THRESHOLD = 2
@@ -213,13 +236,13 @@ def get_model_for_role(role: str) -> str:
     Returns:
         模型名称字符串
     """
-    tier = MODEL_ROUTING.get(role, "strong")
+    tier = _tier_for_role(role)
     return MODEL_TIER[tier]["model"]
 
 
 def get_model_config_for_role(role: str) -> dict:
     """返回角色对应的完整路由（model/provider/base_url/api_key/thinking）。"""
-    tier = MODEL_ROUTING.get(role, "strong")
+    tier = _tier_for_role(role)
     return {**MODEL_TIER[tier], "tier": tier}
 
 

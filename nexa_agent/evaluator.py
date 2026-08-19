@@ -557,6 +557,7 @@ D. 结论有轨迹中的**实际证据/计算**支撑，而非凭空断言
                 {"role": "user", "content": user_prompt},
             ],
             model=self.model_name, max_tokens=512, temperature=0.0, timeout=60.0,
+            usage_role="evaluator",
         )
         return result.content
 
