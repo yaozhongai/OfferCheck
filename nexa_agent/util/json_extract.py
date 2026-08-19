@@ -1,6 +1,6 @@
 """LLM JSON 响应的健壮抽取 + 截断修复。
 
-instruct 模型（GMI 上的 DeepSeek/Kimi/Qwen）没有可靠的 structured-output 模式，
+instruct 模型（DeepSeek/Kimi/Qwen）没有可靠的 structured-output 模式，
 JSON 常夹带 markdown 围栏、前后说明文字，或在 max_tokens 处被截断。本模块提供
 两个纯函数供所有需要解析 LLM JSON 的地方复用（verifier / evaluator / stage_router）：
 

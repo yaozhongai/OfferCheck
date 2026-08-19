@@ -1,11 +1,11 @@
 """LLM 瞬时错误分类 + 指数退避重试（共享 helper）。
 
-GMI 网关的 Connection error / 超时 / 5xx / 429 常见，重试可自愈；4xx 请求错误
-（400/422）是协议/参数问题，不重试直接抛（见 CLAUDE.md GMI 约束）。
+LLM 网关的 Connection error / 超时 / 5xx / 429 常见，重试可自愈；4xx 请求错误
+（400/422）是协议/参数问题，不重试直接抛。
 
 原实现内嵌在 react_agent 的 call_llm_with_tools，仅保护了主循环；抽出为共享 helper
 后，evaluator / verifier / reflexion / stage_router 等质量门也走同一套重试与可观测
-（评审 1.9：重试策略不一致 + 质量门在 GMI 抖动时 fail-open）。
+（评审 1.9：重试策略不一致 + 质量门在网关抖动时 fail-open）。
 """
 
 from __future__ import annotations
@@ -39,18 +39,18 @@ T = TypeVar("T")
 def is_transient_llm_error(exc: Exception) -> bool:
     """是否为可重试的瞬时错误（连接/超时/5xx/429）。4xx（400/422）默认返回 False。
 
-    **例外**（GMI 推理模型协议坑，间歇性后端抖动）：GMI 后端对 DeepSeek-V4 推理模型
+    **例外**（推理模型协议坑，间歇性后端抖动）：后端对 DeepSeek-V4 推理模型
     多轮 tool-calling 偶发返回
         400 "The `reasoning_content` in the thinking mode must be passed back to the API."
     这不是客户端参数错——`reasoning_content` 已由 `_assistant_msg_to_dict` 正确回传，
     且**同一请求模式在其它 Trial/步骤能正常跑完**（实测 Trial 1 同模式跑满 10 步零 400，
-    Trial 2 却在 step 6 撞上）。它属 GMI 后端间歇抖动，重试大概率自愈，故特判为可重试。
+    Trial 2 却在 step 6 撞上）。它属后端间歇抖动，重试大概率自愈，故特判为可重试。
     仅匹配这条特征串，不放宽其它 4xx（避免把真参数错也无谓重试 3 次）。
     """
     if _TRANSIENT_LLM_ERRORS and isinstance(exc, _TRANSIENT_LLM_ERRORS):
         return True
     msg = str(exc).lower()
-    # GMI DeepSeek 推理模型 reasoning_content 协议 400（间歇性后端坑）→ 可重试
+    # DeepSeek 推理模型 reasoning_content 协议 400（间歇性后端坑）→ 可重试
     if "reasoning_content" in msg and "passed back" in msg:
         return True
     # 兜底：按错误文本判断（未装到具体异常类型时）

@@ -1,0 +1,121 @@
+<svg viewBox="0 0 960 510" xmlns="http://www.w3.org/2000/svg" role="img" style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Segoe UI', sans-serif;">
+  <title>OfferCheck 真正核验流程（路演精简版）</title>
+  <desc>模型通过 ReAct 调查决定下一步查什么，系统同步记录真实访问来源与正文摘录。提交裁定后依次检查是否真实检索、证据是否有出处、引用能否与访问记录对账，并在条件触发时由独立事实核查器比对断言与正文。通过则输出三级风险结论，不通过则进入 Reflexion，保留事实、记录教训、排除无效 URL 后重新调查。</desc>
+
+  <defs>
+    <marker id="arrow-gray" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 3.5 L0 7 Z" fill="#8F959E"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 3.5 L0 7 Z" fill="#E5484D"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 3.5 L0 7 Z" fill="#2BA471"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="510" fill="#FFFFFF"/>
+
+  <!-- 核心结论 -->
+  <rect x="260" y="18" width="440" height="50" rx="25" fill="#B85C35"/>
+  <text x="480" y="50" text-anchor="middle" font-size="20" font-weight="700" fill="#FFFFFF">先取证，再裁定</text>
+  <line x1="480" y1="70" x2="480" y2="86" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <!-- 主流程容器 -->
+  <rect x="30" y="88" width="900" height="402" rx="16" fill="#FCFCFD" stroke="#C9CDD4" stroke-width="1.5"/>
+  <text x="54" y="116" font-size="13" font-weight="700" fill="#646A73">双层循环：主动调查取证 → 程序化证据约束 → 反思重试</text>
+
+  <!-- 01 主动调查 -->
+  <text x="60" y="143" font-size="11.5" font-weight="700" fill="#B4502A">01  主动调查</text>
+  <rect x="60" y="154" width="140" height="88" rx="12" fill="#FFFFFF" stroke="#B85C35" stroke-width="2.5"/>
+  <text x="130" y="184" text-anchor="middle" font-size="18" font-weight="700" fill="#B4502A">ReAct 调查</text>
+  <text x="130" y="208" text-anchor="middle" font-size="12.5" fill="#646A73">规划 → 调工具 → 观察</text>
+  <text x="130" y="228" text-anchor="middle" font-size="12" fill="#646A73">决定下一步查什么</text>
+
+  <rect x="60" y="276" width="140" height="72" rx="12" fill="#FFFFFF" stroke="#C9CDD4" stroke-width="1.5"/>
+  <text x="130" y="301" text-anchor="middle" font-size="15" font-weight="700" fill="#1F2329">12 种调查工具</text>
+  <text x="130" y="322" text-anchor="middle" font-size="10.5" fill="#646A73">搜索 · 网页 · 域名 · PDF</text>
+  <text x="130" y="338" text-anchor="middle" font-size="10.5" fill="#646A73">图片 · 表格 · 内容提取</text>
+  <line x1="110" y1="246" x2="110" y2="272" stroke="#8F959E" stroke-width="1.8" marker-end="url(#arrow-gray)"/>
+  <line x1="150" y1="274" x2="150" y2="246" stroke="#8F959E" stroke-width="1.8" marker-end="url(#arrow-gray)"/>
+
+  <!-- 02 证据记账 -->
+  <line x1="204" y1="198" x2="220" y2="198" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+  <text x="225" y="143" font-size="11.5" font-weight="700" fill="#B4502A">02  证据记账</text>
+  <rect x="225" y="154" width="180" height="176" rx="12" fill="#FFF7F2" stroke="#C96A43" stroke-width="2"/>
+  <text x="315" y="181" text-anchor="middle" font-size="18" font-weight="700" fill="#B4502A">两本真实证据账</text>
+
+  <rect x="242" y="196" width="146" height="52" rx="10" fill="#FFFFFF" stroke="#D9DCE1" stroke-width="1.3"/>
+  <text x="315" y="216" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1F2329">seen_urls</text>
+  <text x="315" y="236" text-anchor="middle" font-size="11.5" fill="#646A73">实际见过哪些来源</text>
+
+  <rect x="242" y="260" width="146" height="52" rx="10" fill="#FFFFFF" stroke="#D9DCE1" stroke-width="1.3"/>
+  <text x="315" y="280" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1F2329">evidence_registry</text>
+  <text x="315" y="300" text-anchor="middle" font-size="11.5" fill="#646A73">来源正文实际写了什么</text>
+
+  <!-- 03 提交裁定 -->
+  <line x1="409" y1="221" x2="425" y2="221" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+  <text x="430" y="143" font-size="11.5" font-weight="700" fill="#B4502A">03  提交裁定</text>
+  <rect x="430" y="166" width="120" height="110" rx="12" fill="#FFFFFF" stroke="#C9CDD4" stroke-width="1.8"/>
+  <text x="490" y="192" text-anchor="middle" font-size="17" font-weight="700" fill="#1F2329">提交裁定</text>
+  <text x="490" y="211" text-anchor="middle" font-size="10.5" font-weight="600" fill="#8F959E">submit_verdict</text>
+  <line x1="449" y1="220" x2="531" y2="220" stroke="#E5E6E8" stroke-width="1"/>
+  <text x="490" y="241" text-anchor="middle" font-size="12" fill="#646A73">风险结论</text>
+  <text x="490" y="260" text-anchor="middle" font-size="12" fill="#646A73">+ 逐条证据</text>
+
+  <!-- 04 四层程序化约束 -->
+  <line x1="554" y1="221" x2="570" y2="221" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+  <text x="575" y="143" font-size="11.5" font-weight="700" fill="#B4502A">04  程序化证据约束</text>
+  <rect x="575" y="154" width="215" height="218" rx="12" fill="#FFFFFF" stroke="#B85C35" stroke-width="2.2"/>
+  <text x="682.5" y="181" text-anchor="middle" font-size="17" font-weight="700" fill="#B4502A">四层约束</text>
+
+  <rect x="591" y="194" width="183" height="34" rx="9" fill="#FFF3EC"/>
+  <circle cx="610" cy="211" r="10" fill="#C96A43"/>
+  <text x="610" y="215" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">1</text>
+  <text x="627" y="208" font-size="12" font-weight="700" fill="#8A4A30">取证门</text>
+  <text x="627" y="222" font-size="10.5" fill="#8A5A42">未检索 → 要求继续调查</text>
+
+  <rect x="591" y="236" width="183" height="34" rx="9" fill="#F7F8FA"/>
+  <circle cx="610" cy="253" r="10" fill="#8F959E"/>
+  <text x="610" y="257" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">2</text>
+  <text x="627" y="250" font-size="12" font-weight="700" fill="#1F2329">来源门</text>
+  <text x="627" y="264" font-size="10.5" fill="#646A73">证据必须绑定出处</text>
+
+  <rect x="591" y="278" width="183" height="34" rx="9" fill="#F7F8FA"/>
+  <circle cx="610" cy="295" r="10" fill="#8F959E"/>
+  <text x="610" y="299" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">3</text>
+  <text x="627" y="292" font-size="12" font-weight="700" fill="#1F2329">引用对账</text>
+  <text x="627" y="306" font-size="10.5" fill="#646A73">引用 ↔ 实际访问记录</text>
+
+  <rect x="591" y="320" width="183" height="38" rx="9" fill="#F7F8FA"/>
+  <circle cx="610" cy="339" r="10" fill="#8F959E"/>
+  <text x="610" y="343" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">4</text>
+  <text x="627" y="335" font-size="12" font-weight="700" fill="#1F2329">独立事实核查</text>
+  <text x="627" y="350" font-size="10.5" fill="#646A73">断言 ↔ 来源正文摘录</text>
+  <rect x="727" y="324" width="40" height="14" rx="7" fill="#E8F8F0"/>
+  <text x="747" y="334" text-anchor="middle" font-size="8.5" font-weight="700" fill="#20875A">条件触发</text>
+
+  <!-- 05 输出 -->
+  <line x1="794" y1="221" x2="810" y2="221" stroke="#2BA471" stroke-width="2.5" marker-end="url(#arrow-green)"/>
+  <text x="802" y="208" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2BA471">通过</text>
+  <text x="815" y="143" font-size="11.5" font-weight="700" fill="#20875A">05  输出</text>
+  <rect x="815" y="154" width="95" height="166" rx="12" fill="#FFFFFF" stroke="#C9CDD4" stroke-width="1.8"/>
+  <text x="862.5" y="181" text-anchor="middle" font-size="15" font-weight="700" fill="#1F2329">风险结论</text>
+  <rect x="827" y="194" width="71" height="23" rx="11.5" fill="#E8F8F0"/>
+  <text x="862.5" y="210" text-anchor="middle" font-size="11.5" font-weight="700" fill="#20875A">可信</text>
+  <rect x="827" y="225" width="71" height="23" rx="11.5" fill="#FFF3D6"/>
+  <text x="862.5" y="241" text-anchor="middle" font-size="11.5" font-weight="700" fill="#B76E00">存疑</text>
+  <rect x="827" y="256" width="71" height="31" rx="15.5" fill="#FDEBEC"/>
+  <text x="862.5" y="270" text-anchor="middle" font-size="9.5" font-weight="700" fill="#D83931">高度疑似</text>
+  <text x="862.5" y="282" text-anchor="middle" font-size="9.5" font-weight="700" fill="#D83931">诈骗</text>
+  <text x="862.5" y="306" text-anchor="middle" font-size="10.5" fill="#646A73">附证据链</text>
+
+  <!-- Reflexion 外循环 -->
+  <line x1="682.5" y1="376" x2="682.5" y2="396" stroke="#E5484D" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="696" y="389" font-size="10.5" font-weight="700" fill="#E5484D">评估 / 核查未通过</text>
+  <rect x="548" y="402" width="269" height="56" rx="12" fill="#FFF7F7" stroke="#E5484D" stroke-width="1.8"/>
+  <text x="682.5" y="426" text-anchor="middle" font-size="16" font-weight="700" fill="#D83931">Reflexion 反思重试</text>
+  <text x="682.5" y="447" text-anchor="middle" font-size="11.5" fill="#8F4B4B">记录教训 · 保留事实 · 排除无效 URL</text>
+  <path d="M548 430 H470 Q454 430 454 446 V452 Q454 468 438 468 H58 Q42 468 42 452 V212 Q42 198 54 198" fill="none" stroke="#E5484D" stroke-width="2" stroke-dasharray="7 6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-red)"/>
+  <text x="290" y="460" text-anchor="middle" font-size="11.5" font-weight="700" fill="#E5484D">当前 Trial 作废，带约束重新调查</text>
+</svg>

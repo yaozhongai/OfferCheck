@@ -373,7 +373,7 @@ class VerifierAgent:
                     evidence: Optional[dict] = None) -> VerdictResult:
         """用 LLM 评估来源可信度 + （有 evidence 时）内容 entailment 核查"""
         # 构建精简的核查 prompt。有检索正文摘录的事实附上摘录，供判断「内容是否支持断言」。
-        # 控体量（评审 2.2 修）：GMI 上大 prompt 偶发返回空 content——摘录 ≤300 字、
+        # 控体量（评审 2.2 修）：大 prompt 偶发返回空 content——摘录 ≤300 字、
         # 最多给 4 条事实附摘录，把总 prompt 压在安全区（实测 4k 字符可用、9k 字符会空返回）。
         _MAX_ENTAIL = 4
         _EXCERPT_CHARS = 300
@@ -451,7 +451,7 @@ class VerifierAgent:
     def _call_llm(self, prompt: str) -> str:
         # 统一走 LLM Gateway（评审 3.1）：client/thinking/retry/空响应重试/记账集中管理。
         # max_tokens=2048：CoVe 逐条核查 6-8 条事实易超小上限被截断。
-        # retry_on_empty：GMI 大 prompt（带 entailment 摘录）偶发空返回（评审 2.2）。
+        # retry_on_empty：大 prompt（带 entailment 摘录）偶发空返回（评审 2.2）。
         result = llm_complete(
             [
                 {"role": "system", "content": "你是事实核查员。只输出 JSON，不要输出其他内容。"},

@@ -15,8 +15,8 @@ sqlalchemy>=2.0.0        # ORM
 # Data Validation
 pydantic>=2.7.0
 
-# LLM SDKs（核心引擎经 OpenAI 兼容 SDK 接入任意 provider：GMI / DeepSeek / ...）
-openai>=1.0.0          # OpenAI-compatible：GMI Cloud / DeepSeek / Kimi / 本地 VLM
+# LLM SDKs（核心引擎经 OpenAI 兼容 SDK 接入任意 provider：DeepSeek / Moonshot / ...）
+openai>=1.0.0          # OpenAI-compatible：DeepSeek / Kimi(Moonshot) / 本地 VLM
 
 # Search / HTTP（工具层 web_search / web_fetch / tavily_extract / whois RDAP）
 requests>=2.28.0

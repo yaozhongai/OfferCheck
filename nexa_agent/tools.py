@@ -733,7 +733,7 @@ def analyze_image_cloud(param: str) -> str:
             f"Excel 请用 read_xlsx，PDF 请用 read_pdf。"
         )
 
-    # 去 GMI 化后视觉固定由 Moonshot 官方 Kimi 承担。
+    # 视觉固定由 Moonshot 官方 Kimi 承担。
     provider = VISION_CONFIG["provider"]
     prov_cfg = VISION_CONFIG.get(provider, {})
     if not prov_cfg.get("api_key"):

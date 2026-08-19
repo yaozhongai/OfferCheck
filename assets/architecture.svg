@@ -113,8 +113,8 @@
   <!-- Model Router (infra) -->
   <rect x="28" y="238" width="184" height="60" rx="8" fill="var(--card-bg, #fff)" stroke="var(--border, #ddd)" stroke-width="1.2"/>
   <text x="120" y="258" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text, #333)">Model Router</text>
-  <text x="120" y="273" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">GMI · layered thinking control</text>
-  <text x="120" y="286" text-anchor="middle" font-size="8" fill="var(--text-muted, #888)">DeepSeek-V4 Pro/Flash · Kimi-K2 · Gemini 3.1</text>
+  <text x="120" y="273" text-anchor="middle" font-size="9" fill="var(--text-muted, #888)">layered model routing · usage ledger</text>
+  <text x="120" y="286" text-anchor="middle" font-size="8" fill="var(--text-muted, #888)">DeepSeek-V4 Pro/Flash · Kimi-K2.6</text>
   <line x1="212" y1="268" x2="240" y2="268" stroke="var(--text-muted, #aaa)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
   <text x="120" y="313" text-anchor="middle" font-size="8.5" fill="var(--text-muted, #aaa)">routes every LLM call</text>
 

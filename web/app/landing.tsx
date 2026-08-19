@@ -203,15 +203,14 @@ export default function Landing({ onEnter }: { onEnter: (opts?: { demo?: boolean
           <span style={{ fontSize: promo ? 36 : 24, fontWeight: 800, letterSpacing: "-0.02em" }}>OfferCheck</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-          {/* The competition's required inference base gets the header slot —
-              a bottom footnote dies at WeChat scale. Two-tone: quiet "Powered by",
-              emphatic engine name. */}
+          {/* The inference stack gets the header slot — a bottom footnote dies
+              at WeChat scale. Two-tone: quiet "Powered by", emphatic name. */}
           <span className="oc-header-tag" style={{ fontFamily: MONO, display: "flex", alignItems: "center", gap: 8,
             whiteSpace: "nowrap", fontSize: promo ? 17 : 12, letterSpacing: "0.02em" }}>
             <span style={{ width: promo ? 8 : 6, height: promo ? 8 : 6, borderRadius: 99, background: OK_GREEN, display: "inline-block" }} />
             <span>
               <span style={{ color: FAINT }}>Powered by </span>
-              <b style={{ color: "oklch(30% 0.04 40)" }}>GMI Cloud Inference Engine</b>
+              <b style={{ color: "oklch(30% 0.04 40)" }}>DeepSeek · Kimi — layered model routing</b>
             </span>
           </span>
           {!promo && (

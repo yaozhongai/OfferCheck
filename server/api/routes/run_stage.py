@@ -40,7 +40,7 @@ def _build_agent(request: RunStageRequest):
     from nexa_agent.reflexion_agent import ReflexionReActAgent
     from nexa_agent.config import REFLEXION_CONFIG
 
-    # 服务端强制上限（忽略客户端传入的超大值，防放大 GMI 花费）
+    # 服务端强制上限（忽略客户端传入的超大值，防放大 LLM API 花费）
     max_steps, max_trials = clamp_run_limits(request.max_steps, request.max_trials)
     agent = ReflexionReActAgent(
         max_trials=max_trials,

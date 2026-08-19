@@ -1,0 +1,98 @@
+<svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" role="img" style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Segoe UI', sans-serif;">
+  <title>OfferCheck 系统架构（路演精简版）</title>
+  <desc>多模态求职材料进入四个求职环节，共享同一套调查引擎。ReAct 调查调用工具，经硬性取证门、任务评估、引用对账和事实核验后输出三级风险结论；发现问题时通过 Reflexion 带教训重试。全部模型调用由 GMI Cloud Inference Engine 承载。</desc>
+
+  <defs>
+    <marker id="arrow-gray" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 3.5 L0 7 Z" fill="#8F959E"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 3.5 L0 7 Z" fill="#E5484D"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 3.5 L0 7 Z" fill="#2BA471"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="560" fill="#FFFFFF"/>
+
+  <!-- 输入 -->
+  <rect x="110" y="18" width="740" height="46" rx="23" fill="#B85C35"/>
+  <text x="480" y="47" text-anchor="middle" font-size="18" font-weight="700" fill="#FFFFFF">输入：Offer · JD · 公司信息 · 招聘沟通 · 截图</text>
+  <line x1="480" y1="66" x2="480" y2="82" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <!-- 四个求职环节 -->
+  <rect x="40" y="84" width="880" height="84" rx="14" fill="#F7F8FA" stroke="#D9DCE1" stroke-width="1.5"/>
+  <text x="66" y="108" font-size="13" font-weight="700" fill="#646A73">四个求职环节共享同一套调查引擎，仅切换阶段 Prompt</text>
+
+  <rect x="66" y="120" width="185" height="34" rx="17" fill="#FFFFFF" stroke="#D78A69" stroke-width="1.5"/>
+  <text x="158.5" y="142" text-anchor="middle" font-size="15" font-weight="600" fill="#8A4A30">岗位调研</text>
+  <rect x="280" y="120" width="185" height="34" rx="17" fill="#FFFFFF" stroke="#D78A69" stroke-width="1.5"/>
+  <text x="372.5" y="142" text-anchor="middle" font-size="15" font-weight="600" fill="#8A4A30">简历匹配</text>
+  <rect x="494" y="120" width="185" height="34" rx="17" fill="#FFFFFF" stroke="#D78A69" stroke-width="1.5"/>
+  <text x="586.5" y="142" text-anchor="middle" font-size="15" font-weight="600" fill="#8A4A30">招聘沟通</text>
+  <rect x="708" y="120" width="185" height="34" rx="17" fill="#FFF5F0" stroke="#B85C35" stroke-width="2.5"/>
+  <text x="800.5" y="142" text-anchor="middle" font-size="15" font-weight="700" fill="#B4502A">Offer 核验</text>
+
+  <line x1="480" y1="170" x2="480" y2="188" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <!-- 调查与核验主区 -->
+  <rect x="40" y="190" width="880" height="292" rx="16" fill="#FCFCFD" stroke="#C9CDD4" stroke-width="1.5"/>
+  <text x="66" y="216" font-size="13" font-weight="700" fill="#646A73">自主调查与质量控制</text>
+
+  <!-- ReAct 与工具 -->
+  <rect x="66" y="238" width="215" height="76" rx="12" fill="#FFFFFF" stroke="#B85C35" stroke-width="2.5"/>
+  <text x="173.5" y="269" text-anchor="middle" font-size="19" font-weight="700" fill="#B4502A">ReAct 多源调查</text>
+  <text x="173.5" y="293" text-anchor="middle" font-size="13" fill="#646A73">思考 → 行动 → 观察</text>
+
+  <rect x="66" y="344" width="215" height="56" rx="12" fill="#FFFFFF" stroke="#C9CDD4" stroke-width="1.5"/>
+  <text x="173.5" y="368" text-anchor="middle" font-size="16" font-weight="700" fill="#1F2329">工具箱</text>
+  <text x="173.5" y="389" text-anchor="middle" font-size="12.5" fill="#646A73">搜索 · 网页 · 域名 · 视觉理解</text>
+  <line x1="150" y1="318" x2="150" y2="340" stroke="#8F959E" stroke-width="1.8" marker-end="url(#arrow-gray)"/>
+  <line x1="197" y1="342" x2="197" y2="318" stroke="#8F959E" stroke-width="1.8" marker-end="url(#arrow-gray)"/>
+
+  <!-- 主路径 -->
+  <line x1="284" y1="276" x2="329" y2="276" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <rect x="334" y="238" width="150" height="76" rx="12" fill="#FFF3EC" stroke="#C96A43" stroke-width="2"/>
+  <text x="409" y="268" text-anchor="middle" font-size="18" font-weight="700" fill="#B4502A">硬性取证门</text>
+  <text x="409" y="292" text-anchor="middle" font-size="12.5" fill="#8A5A42">零检索则继续调查</text>
+
+  <line x1="487" y1="276" x2="526" y2="276" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <rect x="531" y="226" width="180" height="100" rx="12" fill="#FFFFFF" stroke="#C9CDD4" stroke-width="1.8"/>
+  <text x="621" y="252" text-anchor="middle" font-size="18" font-weight="700" fill="#1F2329">质量控制</text>
+  <text x="621" y="276" text-anchor="middle" font-size="13" fill="#646A73">任务评估</text>
+  <text x="621" y="296" text-anchor="middle" font-size="13" fill="#646A73">引用对账</text>
+  <text x="621" y="316" text-anchor="middle" font-size="13" fill="#646A73">事实核验</text>
+
+  <line x1="714" y1="276" x2="750" y2="276" stroke="#2BA471" stroke-width="2.5" marker-end="url(#arrow-green)"/>
+  <text x="732" y="264" text-anchor="middle" font-size="12" font-weight="700" fill="#2BA471">通过</text>
+
+  <!-- 三级结论 -->
+  <rect x="755" y="222" width="139" height="112" rx="12" fill="#FFFFFF" stroke="#C9CDD4" stroke-width="1.8"/>
+  <text x="824.5" y="247" text-anchor="middle" font-size="17" font-weight="700" fill="#1F2329">三级风险结论</text>
+  <rect x="771" y="258" width="107" height="20" rx="10" fill="#E8F8F0"/>
+  <text x="824.5" y="273" text-anchor="middle" font-size="12.5" font-weight="700" fill="#20875A">可信</text>
+  <rect x="771" y="284" width="107" height="20" rx="10" fill="#FFF3D6"/>
+  <text x="824.5" y="299" text-anchor="middle" font-size="12.5" font-weight="700" fill="#B76E00">存疑</text>
+  <rect x="771" y="310" width="107" height="20" rx="10" fill="#FDEBEC"/>
+  <text x="824.5" y="325" text-anchor="middle" font-size="12.5" font-weight="700" fill="#D83931">高度疑似诈骗</text>
+
+  <!-- Reflexion 外循环 -->
+  <line x1="621" y1="328" x2="621" y2="352" stroke="#E5484D" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="639" y="345" font-size="12" font-weight="700" fill="#E5484D">发现问题</text>
+  <rect x="518" y="356" width="206" height="48" rx="12" fill="#FFF7F7" stroke="#E5484D" stroke-width="1.8"/>
+  <text x="621" y="377" text-anchor="middle" font-size="16" font-weight="700" fill="#D83931">Reflexion 反思重试</text>
+  <text x="621" y="395" text-anchor="middle" font-size="12" fill="#8F4B4B">提取教训，带入下一轮调查</text>
+  <path d="M518 380 H448 V430 H54 V276 H62" fill="none" stroke="#E5484D" stroke-width="2" stroke-dasharray="7 6" marker-end="url(#arrow-red)"/>
+  <text x="348" y="421" text-anchor="middle" font-size="12" font-weight="700" fill="#E5484D">带教训重试</text>
+
+  <!-- 输出补充 -->
+  <text x="824.5" y="357" text-anchor="middle" font-size="12" fill="#646A73">附证据链与待确认项</text>
+
+  <!-- GMI -->
+  <line x1="480" y1="484" x2="480" y2="500" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
+  <rect x="110" y="504" width="740" height="42" rx="12" fill="#F5F6F7" stroke="#646A73" stroke-width="1.8"/>
+  <text x="480" y="531" text-anchor="middle" font-size="18" font-weight="700" fill="#1F2329">GMI Cloud Inference Engine</text>
+</svg>

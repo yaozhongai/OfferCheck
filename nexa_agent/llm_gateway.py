@@ -293,7 +293,7 @@ class LLMGateway:
             enable_thinking: 是否允许思考（经 thinking_extra_body 按 provider 落参）。
             timeout: 本次请求超时（秒）。
             max_retries: 瞬时错误重试次数（None=DEFAULT；stage_router 传 1 走快失败）。
-            retry_on_empty: 成功但 content 为空时再试一次（GMI 大 prompt 偶发空返回）。
+            retry_on_empty: 成功但 content 为空时再试一次（大 prompt 偶发空返回）。
         """
         route = resolve_model_config(role=role or (None if model else "react_main"),
                                      model=model, provider=provider)

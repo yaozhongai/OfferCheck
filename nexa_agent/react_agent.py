@@ -1005,7 +1005,7 @@ def _as_str_list(v) -> list:
     [RedFlag]（曾见 663 条单字符事实）。这里统一：str→单元素、非序列→单元素、
     序列→逐项 str，并丢掉空串。
 
-    字符串还有一种形态是 double-encode 的 JSON 数组（GMI instruct 模型偶发
+    字符串还有一种形态是 double-encode 的 JSON 数组（instruct 模型偶发
     `"evidence": "[\\"a\\", \\"b\\"]"`）：不解开的话整串 JSON 会以 `[` 开头、
     被 _render_verdict 的标签豁免原样放进答案，前端解析出 0 条 facts 并把
     生 JSON 展示给用户。这里先尝试解成真数组，失败再按单元素字符串处理。
@@ -1259,7 +1259,7 @@ def build_structured_sources(
 def _assistant_msg_to_dict(msg) -> dict:
     """把 SDK 返回的 assistant message 转为可回传的 dict，保留 reasoning_content。
 
-    DeepSeek 推理模型（GMI 上的 DeepSeek-V4-Pro）在多轮 tool-calling 中，
+    DeepSeek 推理模型（DeepSeek-V4-Pro）在多轮 tool-calling 中，
     返回的 assistant 消息带 reasoning_content（存于 pydantic model_extra）。
     直接把 pydantic 对象 append 回 messages 后，SDK 标准序列化会丢掉这个
     非标准字段，导致下一轮请求被后端拒绝：

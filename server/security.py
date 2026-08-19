@@ -4,7 +4,7 @@
 设计前提：单 Railway 实例、单进程 → 用进程内内存计数即可，不引入 Redis/slowapi。
 三层护栏：
   1) 按 IP 滑窗限流（best-effort，XFF 可伪造）；
-  2) 全局每小时 run 上限（硬顶，伪造 IP 也绕不过 → GMI 花费的真正保险）；
+  2) 全局每小时 run 上限（硬顶，伪造 IP 也绕不过 → LLM API 花费的真正保险）；
   3) 并发 run 上限（保护 512MB 实例不被同时的重任务打爆）。
 
 另有：
@@ -144,7 +144,7 @@ def validate_image_path(path: Optional[str], project_root: str) -> Optional[str]
 
 
 def clamp_run_limits(max_steps: Optional[int], max_trials: Optional[int]) -> tuple[Optional[int], Optional[int]]:
-    """服务端强制上限，忽略客户端传入的超大值（防放大 GMI 花费）。"""
+    """服务端强制上限，忽略客户端传入的超大值（防放大 LLM API 花费）。"""
     steps = min(max_steps, MAX_STEPS_CAP) if max_steps else MAX_STEPS_CAP
     trials = min(max_trials, MAX_TRIALS_CAP) if max_trials else MAX_TRIALS_CAP
     return steps, trials
