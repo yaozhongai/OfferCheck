@@ -1,6 +1,6 @@
 <svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" role="img" style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Segoe UI', sans-serif;">
   <title>OfferCheck 系统架构（路演精简版）</title>
-  <desc>多模态求职材料进入四个求职环节，共享同一套调查引擎。ReAct 调查调用工具，经硬性取证门、任务评估、引用对账和事实核验后输出三级风险结论；发现问题时通过 Reflexion 带教训重试。全部模型调用由 GMI Cloud Inference Engine 承载。</desc>
+  <desc>多模态求职材料进入四个求职环节，共享同一套调查引擎。ReAct 调查调用工具，经硬性取证门、任务评估、引用对账和事实核验后输出三级风险结论；发现问题时通过 Reflexion 带教训重试。全部模型调用由 DeepSeek / Kimi（Moonshot）官方 API 经分层模型路由承载。</desc>
 
   <defs>
     <marker id="arrow-gray" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
@@ -91,8 +91,8 @@
   <!-- 输出补充 -->
   <text x="824.5" y="357" text-anchor="middle" font-size="12" fill="#646A73">附证据链与待确认项</text>
 
-  <!-- GMI -->
+  <!-- 模型层 -->
   <line x1="480" y1="484" x2="480" y2="500" stroke="#8F959E" stroke-width="2" marker-end="url(#arrow-gray)"/>
   <rect x="110" y="504" width="740" height="42" rx="12" fill="#F5F6F7" stroke="#646A73" stroke-width="1.8"/>
-  <text x="480" y="531" text-anchor="middle" font-size="18" font-weight="700" fill="#1F2329">GMI Cloud Inference Engine</text>
+  <text x="480" y="531" text-anchor="middle" font-size="18" font-weight="700" fill="#1F2329">DeepSeek · Kimi（Moonshot）官方 API · 分层模型路由</text>
 </svg>
