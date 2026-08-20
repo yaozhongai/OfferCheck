@@ -658,7 +658,8 @@ export default function Home() {
   // ─── Chat input key handler ───────────────────────────────────────
 
   function onChatKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // isComposing: 中文输入法组词期间的 Enter 是选词确认，不能触发发送
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       sendFollowup();
     }
@@ -1110,7 +1111,7 @@ export default function Home() {
                 <textarea
                   value={rawInput}
                   onChange={e => setRawInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && meta.engine === "live") { e.preventDefault(); startInitial(); } }}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && meta.engine === "live") { e.preventDefault(); startInitial(); } }}
                   rows={3}
                   placeholder={UI.rawPlaceholder}
                   style={{ ...inputStyle, resize: "vertical" }}
