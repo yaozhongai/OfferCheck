@@ -601,7 +601,9 @@ def _parse_image_tool_args(param: str) -> tuple:
 def analyze_image(param: str) -> str:
     """端侧图片分析 — llama.cpp MiniCPM-V
 
-    通过 llama.cpp server 的 OpenAI 兼容 API 调用本地 VLM。
+    通过 OpenAI 兼容 API 调用 VLM。默认走本地 llama.cpp server；
+    设置 VLM_BASE_URL 指向云端视觉模型服务（如 Moonshot）即可切换，
+    云端需配 VLM_API_KEY（缺省回退 MOONSHOT_API_KEY）。
     支持本地路径和 URL（自动下载）。
     """
     param = param.strip()
@@ -633,12 +635,20 @@ def analyze_image(param: str) -> str:
     vlm_base_url = os.environ.get("VLM_BASE_URL", "http://127.0.0.1:8080/v1")
     vlm_model = os.environ.get("VLM_MODEL_NAME", "minicpm-v")
     vlm_ctx_size = int(os.environ.get("VLM_CTX_SIZE", "4096"))
+    # 本地 llama.cpp 不校验 key；云端 VLM（如 Moonshot）用 VLM_API_KEY，缺省回退 MOONSHOT_API_KEY
+    vlm_api_key = (
+        os.environ.get("VLM_API_KEY")
+        or os.environ.get("MOONSHOT_API_KEY")
+        or "not-needed"
+    )
+    # n_ctx 是 llama.cpp 专有参数，云端 OpenAI 兼容 API 会拒绝未知字段，仅本地时携带
+    is_local_vlm = "127.0.0.1" in vlm_base_url or "localhost" in vlm_base_url
 
     try:
         from openai import OpenAI
 
         client = OpenAI(
-            api_key="not-needed",
+            api_key=vlm_api_key,
             base_url=vlm_base_url,
             timeout=120.0,
         )
@@ -668,7 +678,7 @@ def analyze_image(param: str) -> str:
             max_tokens=vlm_ctx_size,
             temperature=0.1,
             stream=False,
-            extra_body={"n_ctx": vlm_ctx_size},
+            extra_body={"n_ctx": vlm_ctx_size} if is_local_vlm else None,
         )
 
         elapsed_ms = (time.time() - t0) * 1000
