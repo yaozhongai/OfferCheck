@@ -1,13 +1,13 @@
 # OfferCheck — Job Offer Due-Diligence Agent
 
 <p align="center">
-  <a href="https://offercheck.up.railway.app/">
+  <a href="https://offercheck-4285069-1333978259.ap-shanghai.run.tcloudbase.com/">
     <img src="assets/offercheck_promo_en.png" alt="OfferCheck — paste an offer, JD, or recruiter message and a skeptical agent investigates it live, returning Looks Legit / Suspicious / Likely a Scam with a source-verified evidence chain" width="880">
   </a>
 </p>
 
 <p align="center">
-  <a href="https://offercheck.up.railway.app/"><img src="https://img.shields.io/badge/demo-live-CF6A44?style=flat-square" alt="Live demo"></a>
+  <a href="https://offercheck-4285069-1333978259.ap-shanghai.run.tcloudbase.com/"><img src="https://img.shields.io/badge/demo-live-CF6A44?style=flat-square" alt="Live demo"></a>
   &nbsp;<img src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
   &nbsp;<img src="https://img.shields.io/badge/Next.js-15-000000?style=flat-square&logo=next.js&logoColor=white" alt="Next.js 15">
   &nbsp;<img src="https://img.shields.io/badge/providers-DeepSeek%20%2B%20Moonshot-6E56CF?style=flat-square" alt="DeepSeek and Moonshot official APIs">
